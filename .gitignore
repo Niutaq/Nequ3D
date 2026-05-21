@@ -1,0 +1,16 @@
+# Binaries
+*.exe
+*.bin
+backend/server.exe
+
+# Data
+data/
+
+# Python Virtual Environment
+processing/venv/
+**/__pycache__/
+*.pyc
+
+# IDEs
+.vscode/
+.idea/
