@@ -1,0 +1,28 @@
+{
+  "name": "frontend",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build:dev": "vite build --minify false --mode development",
+    "build": "vite build --mode production",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@google/model-viewer": "^4.3.0",
+    "@lumaai/luma-web": "^0.2.2",
+    "@types/three": "^0.184.1",
+    "@wailsio/runtime": "latest",
+    "gsplat": "^1.2.9",
+    "three": "^0.183.0"
+  },
+  "overrides": {
+    "three": "^0.183.0",
+    "@types/three": "^0.184.1"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "vite": "^8.0.5"
+  }
+}

@@ -1,0 +1,13 @@
+[Desktop Entry]
+Version=1.0
+Name=My Product
+Comment=A nequ3d-app application
+# The Exec line includes %u to pass the URL to the application
+Exec=/usr/local/bin/nequ3d-app.exe %u
+Terminal=false
+Type=Application
+Icon=nequ3d-app.exe
+Categories=Utility;
+StartupWMClass=nequ3d-app.exe
+
+ 

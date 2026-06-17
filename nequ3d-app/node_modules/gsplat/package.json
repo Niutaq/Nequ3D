@@ -1,0 +1,62 @@
+{
+    "name": "gsplat",
+    "version": "1.2.9",
+    "description": "JavaScript Gaussian Splatting library",
+    "main": "dist/index.es.js",
+    "module": "dist/index.es.js",
+    "types": "dist/index.d.ts",
+    "type": "module",
+    "exports": {
+        ".": {
+            "types": "./dist/index.d.ts",
+            "import": "./dist/index.es.js",
+            "default": "./dist/index.es.js"
+        }
+    },
+    "scripts": {
+        "build:wasm": "sh ./compile_wasm.sh",
+        "copy:wasm": "mkdir -p dist/wasm && cp src/wasm/*.wasm dist/wasm/ 2>/dev/null || true",
+        "build": "npm run build:wasm && vite build && npm run copy:wasm",
+        "dev": "vite",
+        "preview": "vite preview",
+        "test": "echo \"No tests specified\" && exit 0",
+        "lint": "eslint \"src/**/*.ts\" \"examples/**/*.ts\"",
+        "format": "prettier --write \"src/**/*.ts\" \"examples/**/*.ts\""
+    },
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/dylanebert/splat.js.git"
+    },
+    "keywords": [
+        "gsplat",
+        "gaussian splatting",
+        "javascript",
+        "3d",
+        "webgl"
+    ],
+    "author": "dylanebert",
+    "license": "MIT",
+    "bugs": {
+        "url": "https://github.com/dylanebert/splat.js/issues"
+    },
+    "homepage": "https://github.com/dylanebert/splat.js#readme",
+    "devDependencies": {
+        "@types/node": "^24.0.13",
+        "@typescript-eslint/eslint-plugin": "^8.36.0",
+        "@typescript-eslint/parser": "^8.36.0",
+        "eslint": "^9.31.0",
+        "eslint-config-prettier": "^10.1.5",
+        "eslint-plugin-prettier": "^5.5.1",
+        "glob": "^11.0.3",
+        "prettier": "^3.6.2",
+        "tslib": "^2.8.1",
+        "typescript": "^5.7.2",
+        "vite": "^5.0.0",
+        "vite-plugin-dts": "^4.3.0",
+        "vite-plugin-top-level-await": "^1.5.0",
+        "vite-plugin-wasm": "^3.5.0"
+    },
+    "files": [
+        "dist/**/*"
+    ]
+}
