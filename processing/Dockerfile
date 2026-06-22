@@ -7,14 +7,14 @@ FROM nvidia/cuda:12.1.1-devel-ubuntu22.04
 # Disable interactive prompts during apt-get
 ENV DEBIAN_FRONTEND=noninteractive
 
-# 1. Install system dependencies, Python, and C++ Headless build requirements
+# 1. Install system dependencies
 RUN apt-get update && apt-get install -y \
     python3 python3-pip git cmake build-essential \
     pkg-config libx11-dev libxcursor-dev libxrandr-dev libxinerama-dev libxi-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# 2. Install Pixar OpenUSD Framework
-RUN pip3 install usd-core
+# 2. Install Pixar OpenUSD Framework and Conversion Libs
+RUN pip3 install usd-core trimesh[all] networkx scipy
 
 # 3. Clone and Patch NVIDIA RTXNTC Repository
 WORKDIR /opt

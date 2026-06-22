@@ -8,15 +8,15 @@ export const content = {
     btnSelect: "Select Mesh",
     btnSelectSplat: "Select 3DGS",
     btnAnalyze: "Run Core Analysis",
-    btnAnalyzeLoad: "Processing...",
-    btnAnalyzeSuccess: "Processed Successfully",
+    btnAnalyzeLoad: "Analyzing...",
+    btnAnalyzeSuccess: "Success",
     btnAnalyzeFailed: "Analysis Failed",
     telemetryTitle: "Telemetry & NTC Metrics",
     viewerEmptyTitle: "No model loaded",
     viewerEmptyDesc: "Select a mesh asset from the Edge node.",
     aiTitle: "Analysis",
     aiEmpty: "Waiting for telemetry to generate architectural insights...",
-    aiLoading: "AI is analyzing telemetry...",
+    aiLoading: "Telemetry analyzing...",
     sysTime: "System Time",
     procTime: "Process Time",
     noFile: "No mesh selected...",
@@ -43,6 +43,9 @@ export const content = {
     themeToggle: "Toggle theme",
     langEnglish: "English",
     langPolish: "Polish",
+    sizeSmall: "Small text",
+    sizeMedium: "Medium text",
+    sizeLarge: "Large text",
     hybridNote:
       "NTC compresses only UV-mapped mesh textures. 3DGS remains an uncompressed environmental background.",
     hybridWaiting:
@@ -52,29 +55,29 @@ export const content = {
     geometryOnly:
       "Geometry-only analysis active. NTC was bypassed for this asset.",
     loadSplatFailed: "Could not load the selected 3DGS environment.",
-    gpuEngine: "GPU_ENGINE",
-    vramLoad: "VRAM_LOAD",
-    sysClock: "SYSTEM_CLOCK",
-    pipelineTimer: "PIPELINE_TIMER",
-    dataIngestion: "DATA_INGESTION",
-    loadAssetBtn: "LOAD ASSET (USD / GLB / SPLAT)",
-    targetBitrate: "TARGET_BITRATE",
-    analyticsEngine: "ANALYTICS_ENGINE",
+    gpuEngine: "GPU LOAD",
+    vramLoad: "VRAM LOAD",
+    sysClock: "SYSTEM CLOCK",
+    pipelineTimer: "PIPELINE TIMER",
+    dataIngestion: "DATA INGESTION",
+    loadAssetBtn: "LOAD ASSET",
+    targetBitrate: "TARGET BITRATE",
+    analyticsEngine: "ANALYTICS ENGINE",
   },
   pl: {
     appSubtitle: "Potok OpenUSD Edge-to-Core",
     btnSelect: "Wybierz siatkę",
     btnSelectSplat: "Wybierz 3DGS",
     btnAnalyze: "Uruchom analizę Core",
-    btnAnalyzeLoad: "Przetwarzanie...",
-    btnAnalyzeSuccess: "Zakończono sukcesem",
+    btnAnalyzeLoad: "Analizowanie...",
+    btnAnalyzeSuccess: "Zakończono",
     btnAnalyzeFailed: "Analiza nieudana",
     telemetryTitle: "Telemetria i metryki NTC",
     viewerEmptyTitle: "Brak wczytanego modelu",
     viewerEmptyDesc: "Wybierz zasób siatki z węzła Edge.",
     aiTitle: "Analiza",
     aiEmpty: "Oczekuje na telemetrię, aby wygenerować analizę...",
-    aiLoading: "AI analizuje telemetrię...",
+    aiLoading: "Analiza telemetrii...",
     sysTime: "Czas systemowy",
     procTime: "Czas procesu",
     noFile: "Nie wybrano siatki...",
@@ -101,6 +104,9 @@ export const content = {
     themeToggle: "Przełącz motyw",
     langEnglish: "Angielski",
     langPolish: "Polski",
+    sizeSmall: "Mały tekst",
+    sizeMedium: "Średni tekst",
+    sizeLarge: "Duży tekst",
     hybridNote:
       "NTC kompresuje tylko tekstury UV siatki. 3DGS pozostaje nieskompresowanym tłem środowiskowym.",
     hybridWaiting:
@@ -110,14 +116,14 @@ export const content = {
     geometryOnly:
       "Aktywna analiza samej geometrii. NTC zostało pominięte dla tego zasobu.",
     loadSplatFailed: "Nie można wczytać wybranego środowiska 3DGS.",
-    gpuEngine: "SILNIK_GPU",
-    vramLoad: "OBCIĄŻENIE_VRAM",
-    sysClock: "ZEGAR_SYSTEMOWY",
-    pipelineTimer: "CZAS_POTOKU",
-    dataIngestion: "POBIERANIE_DANYCH",
-    loadAssetBtn: "WCZYTAJ ZASÓB (USD / GLB / SPLAT)",
-    targetBitrate: "DOCELOWY_BITRATE",
-    analyticsEngine: "SILNIK_ANALITYCZNY",
+    gpuEngine: "SILNIK GPU",
+    vramLoad: "OBCIĄŻENIE VRAM",
+    sysClock: "ZEGAR SYSTEMOWY",
+    pipelineTimer: "CZAS POTOKU",
+    dataIngestion: "POBIERANIE DANYCH",
+    loadAssetBtn: "WCZYTAJ",
+    targetBitrate: "DOCELOWY BITRATE",
+    analyticsEngine: "SILNIK ANALITYCZNY",
   },
 } as const;
 
@@ -165,5 +171,9 @@ export class IntLayer {
         el.setAttribute("aria-label", this.t[key]);
       }
     });
+  }
+
+  static translateAll(root: ParentNode = document) {
+    this.updateDOM(root);
   }
 }

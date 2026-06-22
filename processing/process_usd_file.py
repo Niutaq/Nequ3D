@@ -1,11 +1,14 @@
 # Libraries
 import json
 import os
-import shutil
 import subprocess
 import sys
 import time
 import zipfile  # Built-in library for ZIP/USDZ handling
+
+import numpy as np
+import trimesh
+from pxr import Usd, UsdGeom, UsdShade  # type: ignore
 
 
 def unpack_usdz(usdz_path):
@@ -47,26 +50,62 @@ def unpack_usdz(usdz_path):
 
 def generate_proxy_mesh(usd_path):
     """
-    Generates a lightweight .glb (.gltf) proxy file from a heavy .usd for WebGL frontend.
+    Generates a lightweight .glb (.gltf) structural proxy directly via Pixar API.
+    Extracts vertices and faces, triangulates them on the fly, and exports to GLB.
     """
     proxy_path = usd_path.rsplit(".", 1)[0] + "_proxy.glb"
-
-    # [PRODUCTION ARCHITECTURE]
-    # Future implementation using e.g., usd2gltf.exe:
-    # subprocess.run(["usd2gltf.exe", usd_path, proxy_path], check=True)
-
-    # [MOCK - FRONTEND UNLOCK]
-    # Uses test_glb.glb to simulate successful proxy generation.
-    mock_source = os.path.join(os.path.dirname(usd_path), "..", "raw", "test_glb.glb")
+    print(
+        f"[Core Python] Generowanie strukturalnego proxy GLB natywnie przez API Pixara: {usd_path}"
+    )
 
     try:
-        # Simulate proxy generation time
-        time.sleep(1.0)
-        if os.path.exists(mock_source):
-            shutil.copyfile(mock_source, proxy_path)
+        stage = Usd.Stage.Open(usd_path)
+        if not stage:
+            print(f"[Core Python] Błąd: Nie można otworzyć sceny USD: {usd_path}")
+            return None
+
+        meshes = []
+        for prim in stage.Traverse():
+            if prim.IsA(UsdGeom.Mesh):
+                mesh = UsdGeom.Mesh(prim)
+                points = mesh.GetPointsAttr().Get()
+                face_counts = mesh.GetFaceVertexCountsAttr().Get()
+                face_indices = mesh.GetFaceVertexIndicesAttr().Get()
+
+                if not points or not face_counts or not face_indices:
+                    continue
+
+                vertices = np.array(points)
+                counts = np.array(face_counts)
+                indices = np.array(face_indices)
+
+                faces = []
+                idx = 0
+                for count in counts:
+                    for i in range(1, count - 1):
+                        faces.append(
+                            [indices[idx], indices[idx + i], indices[idx + i + 1]]
+                        )
+                    idx += count
+
+                if faces:
+                    tri_mesh = trimesh.Trimesh(vertices=vertices, faces=faces)
+                    meshes.append(tri_mesh)
+
+        if meshes:
+            combined = trimesh.util.concatenate(meshes)
+
+            transform = trimesh.transformations.rotation_matrix(np.pi / 2, [1, 0, 0])
+            combined.apply_transform(transform)
+
+            combined.export(proxy_path)
+            print(f"[Core Python] Sukces! Wygenerowano proxy GLB: {proxy_path}")
             return proxy_path
+        else:
+            print("[Core Python] Brak geometrii typu Mesh w pliku USD.")
+
     except Exception as e:
-        print(f"[Core Python] Error: Proxy generation failed: {e}")
+        print(f"[Core Python] Błąd przy natywnej ekstrakcji geometrii: {e}")
 
     return None
 
@@ -79,105 +118,107 @@ def run_ntc_compression(usd_path, texture_paths, target_bpp):
     base_dir = os.path.dirname(usd_path)
 
     for idx, tex_path in enumerate(texture_paths):
-        # Remove USD-specific markers
-        clean_tex_path = tex_path.replace("@", "")
+        clean_tex_path = tex_path.replace("@", "").lstrip("./")
 
-        # Handle textures embedded inside USDZ archives
-        if clean_tex_path.startswith("0/") or clean_tex_path.startswith("./"):
-            clean_tex_path = clean_tex_path.lstrip("./").lstrip("0/")
+        actual_tex_path = None
 
-        if not os.path.isabs(clean_tex_path):
-            actual_tex_path = os.path.normpath(os.path.join(base_dir, clean_tex_path))
+        direct_path = os.path.normpath(os.path.join(base_dir, clean_tex_path))
+        if os.path.exists(direct_path):
+            actual_tex_path = direct_path
         else:
-            actual_tex_path = clean_tex_path
+            base_name_to_find = os.path.basename(clean_tex_path)
+            print(f"[Core Python] Searching for: {base_name_to_find}...")
+
+            for root, dirs, files in os.walk(base_dir):
+                if base_name_to_find in files:
+                    actual_tex_path = os.path.join(root, base_name_to_find)
+                    break
+
+        if not actual_tex_path:
+            print(
+                f"[Core Python] Warning: Missing {clean_tex_path}. None found in {base_dir}"
+            )
+            base_name = os.path.basename(clean_tex_path)
+            compressed_assets.append(
+                {
+                    "original": base_name,
+                    "original_path": clean_tex_path,
+                    "status": "Skipped - File missing",
+                    "bypass_reason": "Texture reference is not available as a physical file.",
+                }
+            )
+            continue
 
         output_ntc_file = f"{actual_tex_path}.ntc"
         base_name = os.path.basename(actual_tex_path)
 
-        if os.path.exists(actual_tex_path):
-            print(
-                f"[Core Python] NTC: Starting compression for {base_name} at {target_bpp} BPP..."
+        print(
+            f"[Core Python] NTC: Starting compression for {base_name} in {target_bpp} BPP..."
+        )
+
+        # Execute the NTC-CLI compressor
+        cmd = [
+            "ntc-cli",
+            actual_tex_path,
+            "-c",
+            "-o",
+            output_ntc_file,
+            "-b",
+            str(target_bpp),
+            "-S",
+            "150",
+        ]
+
+        try:
+            start_time = time.time()
+            result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+            elapsed = time.time() - start_time
+
+            ntc_size_mb = os.path.getsize(output_ntc_file) / (1024 * 1024)
+            bpp_float = float(target_bpp)
+            raw_vram_mb = ntc_size_mb * (32.0 / bpp_float)
+            vram_saved = raw_vram_mb - ntc_size_mb
+            reduction = 100 - ((ntc_size_mb / raw_vram_mb) * 100)
+
+            reconstructed_img_path = actual_tex_path + "_reconstructed.png"
+            decompress_cmd = [
+                "ntc-cli",
+                output_ntc_file,
+                "-d",
+                "-o",
+                reconstructed_img_path,
+            ]
+            subprocess.run(decompress_cmd, check=True, capture_output=True)
+
+            psnr_value = "N/A"
+            for line in result.stdout.splitlines():
+                if "PSNR" in line or "psnr" in line or "Avg" in line:
+                    psnr_value = line.strip()
+
+            compressed_assets.append(
+                {
+                    "original": base_name,
+                    "status": "Compressed",
+                    "original_path": actual_tex_path,
+                    "reconstructed_path": reconstructed_img_path,
+                    "ntc_file": os.path.basename(output_ntc_file),
+                    "compression_time_sec": round(elapsed, 2),
+                    "raw_vram_mb": round(raw_vram_mb, 2),
+                    "ntc_vram_mb": round(ntc_size_mb, 2),
+                    "vram_saved_mb": round(vram_saved, 2),
+                    "vram_reduction": f"{round(reduction, 1)}%",
+                    "metrics": psnr_value,
+                }
             )
 
-            # Execute NTC-CLI
-            cmd = [
-                "ntc-cli",
-                actual_tex_path,
-                "-c",
-                "-o",
-                output_ntc_file,
-                "-b",
-                str(target_bpp),
-                "-S",
-                "150",
-            ]
-
-            try:
-                start_time = time.time()
-                # 1. Compression (From JPEG to .NTC neural network)
-                result = subprocess.run(cmd, check=True, capture_output=True, text=True)
-                elapsed = time.time() - start_time
-
-                # VRAM Mathematics
-                ntc_size_mb = os.path.getsize(output_ntc_file) / (1024 * 1024)
-                bpp_float = float(target_bpp)
-                raw_vram_mb = ntc_size_mb * (32.0 / bpp_float)
-                vram_saved = raw_vram_mb - ntc_size_mb
-                reduction = 100 - ((ntc_size_mb / raw_vram_mb) * 100)
-
-                # --- 2. Decompression for A/B Testing ---
-                # Decompress the generated .ntc network back to pixels (to _reconstructed.png)
-                reconstructed_img_path = actual_tex_path + "_reconstructed.png"
-                decompress_cmd = [
-                    "ntc-cli",
-                    output_ntc_file,
-                    "-d",
-                    "-o",
-                    reconstructed_img_path,
-                ]
-                # Run decompression process in the background
-                subprocess.run(decompress_cmd, check=True, capture_output=True)
-
-                # Quality verification (PSNR)...
-                psnr_value = "N/A"
-                for line in result.stdout.splitlines():
-                    if "PSNR" in line or "psnr" in line or "Avg" in line:
-                        psnr_value = line.strip()
-
-                compressed_assets.append(
-                    {
-                        "original": base_name,
-                        "status": "Compressed",
-                        "original_path": actual_tex_path,
-                        "reconstructed_path": reconstructed_img_path,
-                        "ntc_file": os.path.basename(output_ntc_file),
-                        "compression_time_sec": round(elapsed, 2),
-                        "raw_vram_mb": round(raw_vram_mb, 2),
-                        "ntc_vram_mb": round(ntc_size_mb, 2),
-                        "vram_saved_mb": round(vram_saved, 2),
-                        "vram_reduction": f"{round(reduction, 1)}%",
-                        "metrics": psnr_value,
-                    }
-                )
-
-            except subprocess.CalledProcessError as e:
-                print(f"[Core Python] NTC Error for {base_name}: {e.stderr}")
-                compressed_assets.append(
-                    {
-                        "original": base_name,
-                        "original_path": actual_tex_path,
-                        "status": "Failed",
-                        "error": "Compression failed. Check Docker logs.",
-                    }
-                )
-        else:
-            print(f"[Core Python] Warning: File {actual_tex_path} not found on disk.")
+        except subprocess.CalledProcessError as e:
+            print(f"[Core Python] NTC Error for {base_name}: {e.stderr}")
             compressed_assets.append(
                 {
                     "original": base_name,
                     "original_path": actual_tex_path,
-                    "status": "Skipped - File isolated or missing",
-                    "bypass_reason": "Texture reference is not available as a loose file.",
+                    "status": "Failed",
+                    "error": "Compression failed. Check Docker logs.",
                 }
             )
 

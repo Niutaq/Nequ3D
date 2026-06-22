@@ -136,10 +136,10 @@ nequ3d-core     latest    xxxxxxxxxxxx
 
 # Running the Analytics Application
 
-Navigate to the application frontend:
+Navigate to the application root:
 
 ```bash
-cd nequ3d-app/frontend
+cd nequ3d-app
 ```
 
 Generate Wails bindings:
@@ -182,7 +182,7 @@ docker build -t nequ3d-core:latest .
 Start the analytics application:
 
 ```bash
-cd ../nequ3d-app/frontend
+cd ../nequ3d-app
 wails3 generate bindings && wails3 dev
 ```
 

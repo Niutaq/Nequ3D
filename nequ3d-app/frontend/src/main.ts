@@ -11,6 +11,7 @@ import { IntLayer, type Language } from "./i18n";
 
 type ViewerMode = "mesh" | "quality";
 type ModelChoice = "gemma:2b" | "llama3" | "mistral";
+type TextScale = "sm" | "md" | "lg";
 
 type SysStats = {
   time: string;
@@ -46,36 +47,44 @@ const LOCAL_FILE_ENDPOINT = "http://localhost:8081/api/local-file?path=";
 const MIN_LEFT_PANEL = 280;
 const MIN_RIGHT_PANEL = 300;
 const MIN_CENTER_PANEL = 420;
+const TEXT_SCALE_OPTIONS: Record<TextScale, string> = {
+  sm: "16px",
+  md: "20px",
+  lg: "24px",
+};
 
 const style = document.createElement("style");
 style.textContent = `
   :root {
-    --bg-base: #0B1116;
-    --bg-panel: #111820;
-    --bg-darker: #070B0E;
-    --border-color: #1C2733;
-    --accent-orange: #FF6D00;
-    --accent-orange-dim: rgba(255, 109, 0, 0.15);
-    --accent-emerald: #10B981;
-    --text-main: #E2E8F0;
-    --text-muted: #64748B;
+    --base-font-size: 20px;
+    --bg-base: #121212;
+    --bg-panel: #1A1A1A;
+    --bg-darker: #0D0D0D;
+    --border-color: #2D3748;
+    --accent-teal: #0D9488;
+    --accent-teal-dim: rgba(13, 148, 136, 0.14);
+    --text-main: #F7FAFC;
+    --text-muted: #A0AEC0;
     --font-mono: 'JetBrains Mono', monospace;
     --left-panel-width: 400px;
     --right-panel-width: 420px;
   }
 
   body[data-theme="light"] {
-    --bg-base: #F1F5F9;
+    --bg-base: #F7FAFC;
     --bg-panel: #FFFFFF;
-    --bg-darker: #E2E8F0;
-    --border-color: #CBD5E1;
-    --text-main: #0F172A;
-    --text-muted: #64748B;
+    --bg-darker: #EDF2F7;
+    --border-color: #E2E8F0;
+    --text-main: #1A202C;
+    --text-muted: #718096;
   }
 
   * { box-sizing: border-box; }
 
-  html { font-size: 20px; }
+  html {
+    font-size: var(--base-font-size, 20px);
+    transition: font-size 0.18s ease;
+  }
 
   body {
     margin: 0;
@@ -96,6 +105,7 @@ style.textContent = `
       "leftpanel viewport rightpanel";
     height: 100vh;
     width: 100vw;
+    background: radial-gradient(circle at top right, rgba(13, 148, 136, 0.08), transparent 50%), var(--bg-base);
   }
 
   .topbar {
@@ -122,7 +132,7 @@ style.textContent = `
 
   .viewport {
     grid-area: viewport;
-    background: var(--bg-base);
+    background: transparent;
     position: relative;
     overflow: hidden;
   }
@@ -140,11 +150,11 @@ style.textContent = `
 
   .telemetry-group { display: flex; gap: 40px; }
   .telemetry-item { display: flex; flex-direction: column; gap: 6px; }
-  .telemetry-label { font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.1em; }
-  .telemetry-value { font-family: var(--font-mono); font-size: 18px; font-weight: 600; color: var(--accent-emerald); }
+  .telemetry-label { font-family: var(--font-mono); font-size: 0.55rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.1em; }
+  .telemetry-value { font-family: var(--font-mono); font-size: 0.9rem; font-weight: 600; color: var(--accent-teal); }
 
   .sys-bar-bg { width: 80px; height: 3px; background: var(--border-color); margin-top: 6px; }
-  .sys-bar-fill { height: 100%; background: var(--accent-emerald); transition: width 0.3s; }
+  .sys-bar-fill { height: 100%; background: var(--accent-teal); transition: width 0.3s; }
 
   .technical-button {
     background: var(--bg-darker);
@@ -153,7 +163,7 @@ style.textContent = `
     padding: 16px;
     cursor: pointer;
     font-family: var(--font-mono);
-    font-size: 13px;
+    font-size: 0.65rem;
     font-weight: 600;
     text-transform: uppercase;
     display: flex;
@@ -163,22 +173,22 @@ style.textContent = `
     transition: all 0.15s ease;
     border-radius: 0;
   }
-  .technical-button:hover:not(:disabled) { border-color: var(--accent-orange); background: var(--accent-orange-dim); color: var(--accent-orange); }
+  .technical-button:hover:not(:disabled) { border-color: var(--accent-teal); background: var(--accent-teal-dim); color: var(--accent-teal); }
   .technical-button:disabled { opacity: 0.4; cursor: not-allowed; }
-  .technical-button.primary { border-color: var(--accent-orange); color: var(--accent-orange); background: var(--accent-orange-dim); }
+  .technical-button.primary { border-color: var(--accent-teal); color: var(--accent-teal); background: var(--accent-teal-dim); }
 
   .panel-section { display: flex; flex-direction: column; gap: 16px; }
-  .section-label { font-family: var(--font-mono); font-size: 12px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; border-left: 2px solid var(--accent-orange); padding-left: 10px; }
+  .section-label { font-family: var(--font-mono); font-size: 0.6rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; border-left: 2px solid var(--accent-teal); padding-left: 10px; }
 
-  .technical-select { background: var(--bg-darker); border: 1px solid var(--border-color); color: var(--text-main); padding: 12px; font-family: var(--font-mono); font-size: 14px; width: 100%; outline: none; }
+  .technical-select { background: var(--bg-darker); border: 1px solid var(--border-color); color: var(--text-main); padding: 12px; font-family: var(--font-mono); font-size: 0.7rem; width: 100%; outline: none; }
 
   input[type="range"]:not(.comp-slider) { -webkit-appearance: none; width: 100%; background: transparent; }
   input[type="range"]:not(.comp-slider)::-webkit-slider-runnable-track { width: 100%; height: 2px; background: var(--border-color); }
-  input[type="range"]:not(.comp-slider)::-webkit-slider-thumb { -webkit-appearance: none; height: 16px; width: 8px; background: var(--accent-orange); margin-top: -7px; cursor: pointer; }
+  input[type="range"]:not(.comp-slider)::-webkit-slider-thumb { -webkit-appearance: none; height: 16px; width: 8px; background: var(--accent-teal); margin-top: -7px; cursor: pointer; }
 
   .viewer-tabs { position: absolute; top: 0; left: 0; display: flex; z-index: 1000; background: var(--bg-darker); border-bottom: 1px solid var(--border-color); border-right: 1px solid var(--border-color); }
-  .view-tab { background: transparent; border: none; border-right: 1px solid var(--border-color); color: var(--text-muted); padding: 14px 28px; font-family: var(--font-mono); font-size: 12px; text-transform: uppercase; cursor: pointer; transition: all 0.2s; }
-  .view-tab.active { color: var(--accent-orange); background: var(--bg-panel); box-shadow: inset 0 -2px 0 var(--accent-orange); }
+  .view-tab { background: transparent; border: none; border-right: 1px solid var(--border-color); color: var(--text-muted); padding: 14px 28px; font-family: var(--font-mono); font-size: 0.6rem; text-transform: uppercase; cursor: pointer; transition: all 0.2s; }
+  .view-tab.active { color: var(--accent-teal); background: var(--bg-panel); box-shadow: inset 0 -2px 0 var(--accent-teal); }
 
   .viewer-layer { position: absolute; inset: 0; width: 100%; height: 100%; }
   .comparison-wrapper { display: flex; align-items: center; justify-content: center; overflow: hidden; position: absolute; inset: 0; background: #000; }
@@ -186,32 +196,51 @@ style.textContent = `
   .comp-img { object-fit: contain; max-width: 100%; max-height: 100%; display: block; }
   .img-after { position: absolute; inset: 0; z-index: 2; }
   .comp-slider { position: absolute; top: 0; left: 0; width: 100%; height: 100%; opacity: 0; cursor: ew-resize; z-index: 10; margin: 0; }
-  .comp-divider { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--accent-orange); pointer-events: none; z-index: 5; box-shadow: 0 0 10px var(--accent-orange); }
+  .comp-divider { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--accent-teal); pointer-events: none; z-index: 5; box-shadow: 0 0 10px var(--accent-teal); }
 
   .viewer-placeholder { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; color: var(--text-muted); font-family: var(--font-mono); text-transform: uppercase; letter-spacing: 0.2em; gap: 20px; }
 
-  pre#output { background: var(--bg-darker); border: 1px solid var(--border-color); padding: 14px; font-size: 12px; color: var(--accent-emerald); overflow: auto; max-height: 250px; margin: 0; font-family: var(--font-mono); }
+  pre#output {
+    flex: 1;
+    min-height: 160px;
+    background: var(--bg-darker);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    box-shadow: inset 0 2px 4px rgba(0,0,0,0.1);
+    padding: 14px;
+    font-size: 0.6rem;
+    color: var(--accent-teal);
+    overflow: auto;
+    margin: 0;
+    font-family: var(--font-mono);
+    scrollbar-color: var(--border-color) transparent;
+    scrollbar-width: thin;
+  }
+  pre#output::-webkit-scrollbar { width: 8px; height: 8px; }
+  pre#output::-webkit-scrollbar-track { background: transparent; }
+  pre#output::-webkit-scrollbar-thumb { background: var(--border-color); border-radius: 999px; }
+  pre#output::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
 
-  .spinner { width: 16px; height: 16px; border: 2px solid rgba(255, 255, 255, 0.1); border-top-color: var(--accent-orange); border-radius: 50%; animation: spin 0.8s linear infinite; }
+  .spinner { width: 16px; height: 16px; border: 2px solid rgba(160, 174, 192, 0.18); border-top-color: var(--accent-teal); border-radius: 50%; animation: spin 0.8s linear infinite; }
   @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 
-  .panel-gutter:hover { background: var(--accent-orange-dim); }
-  .panel-gutter.dragging { background: var(--accent-orange); }
+  .panel-gutter:hover { background: var(--accent-teal-dim); }
+  .panel-gutter.dragging { background: var(--accent-teal); }
+
+  .topbar-actions { display: flex; gap: 12px; align-items: center; }
+  .segmented { display: flex; border: 1px solid var(--border-color); background: var(--bg-darker); }
+  .segmented .view-tab { min-width: 44px; height: 44px; padding: 0 16px; display: flex; align-items: center; justify-content: center; }
+  .segmented .view-tab:last-child { border-right: none; }
+  .text-scale-control .view-tab { min-width: 46px; }
 `;
 document.head.appendChild(style);
 
 const Icons = {
   box: `<svg width="42" height="42" viewBox="0 0 64 64" fill="none" aria-hidden="true">
-    <!-- Neural Node / Wireframe Cube -->
-    <path d="M32 12 L52 24 L52 46 L32 58 L12 46 L12 24 Z" stroke="#10B981" stroke-width="2" stroke-linejoin="round" fill="rgba(16, 185, 129, 0.05)"/>
-    <path d="M32 12 L32 35 M12 24 L32 35 M52 24 L32 35" stroke="#10B981" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-    <circle cx="32" cy="35" r="4" fill="#FF6D00" filter="drop-shadow(0 0 4px #FF6D00)"/>
-    <circle cx="32" cy="12" r="2" fill="#10B981"/>
-    <circle cx="52" cy="24" r="2" fill="#10B981"/>
-    <circle cx="52" cy="46" r="2" fill="#10B981"/>
-    <circle cx="32" cy="58" r="2" fill="#10B981"/>
-    <circle cx="12" cy="46" r="2" fill="#10B981"/>
-    <circle cx="12" cy="24" r="2" fill="#10B981"/>
+    <path d="M18 20h24l8 8v16H18V20Z" stroke="currentColor" stroke-width="2.4" stroke-linejoin="round"/>
+    <path d="M42 20v8h8" stroke="var(--accent-teal)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M26 32h16" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" opacity="0.5"/>
+    <circle cx="48" cy="44" r="3.5" fill="var(--accent-teal)"/>
   </svg>`,
   moon: `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M20.2 14.8A8.3 8.3 0 0 1 9.2 3.8 8.5 8.5 0 1 0 20.2 14.8Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>`,
   sun: `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="4" stroke="currentColor" stroke-width="2"/><path d="M12 2v2M12 20v2M4 12H2M22 12h-2M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>`,
@@ -223,6 +252,7 @@ let currentAbsolutePath = "";
 let currentModelDir = "";
 let currentBpp = "5";
 let activeMode: ViewerMode = "mesh";
+let activeTextScale: TextScale = "md";
 let timerInterval: number | null = null;
 let qualityAvailable = false;
 
@@ -250,14 +280,19 @@ function initUI(): void {
           </div>
           <div class="telemetry-item">
             <span class="telemetry-label" data-i18n="pipelineTimer"></span>
-            <span id="process-timer" class="telemetry-value" style="color: var(--accent-orange);">0.0s</span>
+            <span id="process-timer" class="telemetry-value" style="color: var(--accent-teal);">0.0s</span>
           </div>
         </div>
 
-        <div class="topbar-actions" style="display: flex; gap: 20px; align-items: center;">
-          <div class="segmented" style="display: flex; border: 1px solid var(--border-color); background: var(--bg-darker);">
-            <button id="btn-lang-en" class="view-tab" style="padding: 10px 20px; border-right: 1px solid var(--border-color);">EN</button>
-            <button id="btn-lang-pl" class="view-tab" style="padding: 10px 20px; border: none;">PL</button>
+        <div class="topbar-actions">
+          <div class="segmented language-control">
+            <button id="btn-lang-en" class="view-tab">EN</button>
+            <button id="btn-lang-pl" class="view-tab">PL</button>
+          </div>
+          <div class="segmented text-scale-control">
+            <button id="btn-size-sm" class="view-tab" data-i18n-title="sizeSmall" data-i18n-aria="sizeSmall">A-</button>
+            <button id="btn-size-md" class="view-tab" data-i18n-title="sizeMedium" data-i18n-aria="sizeMedium">A</button>
+            <button id="btn-size-lg" class="view-tab" data-i18n-title="sizeLarge" data-i18n-aria="sizeLarge">A+</button>
           </div>
           <button id="theme-toggle" class="technical-button" style="padding: 0; width: 44px; height: 44px; display: grid; place-items: center;" data-i18n-title="themeToggle">${Icons.moon}</button>
         </div>
@@ -277,7 +312,7 @@ function initUI(): void {
           <span class="section-label" data-i18n="neuralBitrate"></span>
           <div style="display: flex; justify-content: space-between; align-items: center;">
             <span class="telemetry-label" data-i18n="targetBitrate"></span>
-            <span id="bpp-val" class="telemetry-value" style="font-size: 16px; color: var(--accent-orange);"></span>
+            <span id="bpp-val" class="telemetry-value" style="font-size: 0.8rem; color: var(--accent-teal);"></span>
           </div>
           <input type="range" id="bpp-slider" min="1" max="8" step="1" value="5">
         </div>
@@ -285,20 +320,21 @@ function initUI(): void {
         <div class="panel-section">
           <span class="section-label" data-i18n="modelLabel"></span>
           <select id="llm-model" class="technical-select">
-            <option value="gemma:2b" data-i18n="modelFast"></option>
+            <option value="gemma2" data-i18n="modelFast"></option>
             <option value="llama3" data-i18n="modelLlama"></option>
+            <option value="llava">LLaVA (Vision AI)</option>
             <option value="mistral" data-i18n="modelMistral"></option>
           </select>
         </div>
 
-        <button id="analyze-btn" class="technical-button" style="margin-top: auto; border-color: var(--accent-emerald); color: var(--accent-emerald);" disabled>
+        <button id="analyze-btn" class="technical-button" style="margin-top: auto; border-color: var(--accent-teal); color: var(--accent-teal);" disabled>
           ${Icons.play}
           <span data-i18n="btnAnalyze"></span>
         </button>
 
         <div class="panel-section">
           <span class="section-label" data-i18n="telemetryTitle"></span>
-          <pre id="output" class="mono">_</pre>
+          <div id="output" class="telemetry-table-container"></div>
         </div>
         </aside>
 
@@ -324,8 +360,8 @@ function initUI(): void {
               <div id="comp-divider" class="comp-divider"></div>
               <input type="range" min="0" max="100" value="50" class="comp-slider" id="compare-slider">
 
-              <div class="telemetry-label" style="position: absolute; top: 15px; left: 15px; z-index: 20; background: rgba(0,0,0,0.5); padding: 4px 8px;" data-i18n="origLabel"></div>
-              <div class="telemetry-label" style="position: absolute; top: 15px; right: 15px; z-index: 20; background: rgba(0,0,0,0.5); padding: 4px 8px;" data-i18n="ntcLabel"></div>
+              <div class="telemetry-label" style="position: absolute; top: 60px; left: 20px; z-index: 9999; background: rgba(15, 23, 42, 0.8); backdrop-filter: blur(4px); border-radius: 4px; padding: 6px 12px; pointer-events: none; border: 1px solid var(--border-color);" data-i18n="origLabel"></div>
+              <div class="telemetry-label" style="position: absolute; top: 60px; right: 20px; z-index: 9999; background: rgba(15, 23, 42, 0.8); backdrop-filter: blur(4px); border-radius: 4px; padding: 6px 12px; pointer-events: none; border: 1px solid var(--border-color);" data-i18n="ntcLabel"></div>
           </div>
         </div>
         </main>
@@ -347,6 +383,7 @@ function initUI(): void {
 
   IntLayer.init();
   initTheme();
+  initTextScale();
   updateLanguageButtons();
   updateBppLabel();
   attachEventListeners();
@@ -376,6 +413,15 @@ function attachEventListeners(): void {
   );
   getEl<HTMLButtonElement>("btn-lang-pl").addEventListener("click", () =>
     setLanguage("pl"),
+  );
+  getEl<HTMLButtonElement>("btn-size-sm").addEventListener("click", () =>
+    setTextScale("sm"),
+  );
+  getEl<HTMLButtonElement>("btn-size-md").addEventListener("click", () =>
+    setTextScale("md"),
+  );
+  getEl<HTMLButtonElement>("btn-size-lg").addEventListener("click", () =>
+    setTextScale("lg"),
   );
   getEl<HTMLButtonElement>("theme-toggle").addEventListener(
     "click",
@@ -472,12 +518,14 @@ async function runAnalysis(): Promise<void> {
   if (!currentAbsolutePath) return;
 
   const analyzeBtn = getEl<HTMLButtonElement>("analyze-btn");
-  const outputPre = getEl<HTMLPreElement>("output");
+  const outputPre = getEl<HTMLElement>("output");
   const processTimer = getEl<HTMLDivElement>("process-timer");
 
   switchTab("mesh");
   analyzeBtn.disabled = true;
-  analyzeBtn.innerHTML = `<div class="spinner"></div><span>${IntLayer.t.btnAnalyzeLoad}</span>`;
+  analyzeBtn.innerHTML =
+    '<div class="spinner"></div><span data-i18n="btnAnalyzeLoad"></span>';
+  IntLayer.translateAll(analyzeBtn);
   setQualityAvailability(false);
 
   const startTime = Date.now();
@@ -489,12 +537,14 @@ async function runAnalysis(): Promise<void> {
     const result = await ProcessModel(currentAbsolutePath, currentBpp);
     const parsedJson = parseTelemetry(result);
     await hydrateViewers(parsedJson);
-    outputPre.textContent = JSON.stringify(parsedJson, null, 2);
-    analyzeBtn.innerHTML = `<span>${IntLayer.t.btnAnalyzeSuccess}</span>`;
+    outputPre.innerHTML = renderTelemetryHTML(parsedJson);
+    analyzeBtn.innerHTML = '<span data-i18n="btnAnalyzeSuccess"></span>';
+    IntLayer.translateAll(analyzeBtn);
     await runAdvice(result, parsedJson);
   } catch (error) {
-    outputPre.textContent = `${IntLayer.t.errorFailed}: ${String(error)}`;
-    analyzeBtn.innerHTML = `<span>${IntLayer.t.btnAnalyzeFailed}</span>`;
+    outputPre.innerHTML = `<div style="color: red;">${IntLayer.t.errorFailed}: ${String(error)}</div>`;
+    analyzeBtn.innerHTML = '<span data-i18n="btnAnalyzeFailed"></span>';
+    IntLayer.translateAll(analyzeBtn);
   } finally {
     if (timerInterval) {
       clearInterval(timerInterval);
@@ -731,6 +781,7 @@ async function runAdvice(
 
   const payload = JSON.stringify({
     model: getSelectedModel(),
+    language: IntLayer.currentLang === "pl" ? "Polish" : "English",
     analysis_mode: qualityAvailable ? "mesh_ntc" : "geometry_only",
     ntc_bypassed: !qualityAvailable || Boolean(parsedTelemetry.ntc_bypassed),
     instruction_context: qualityAvailable
@@ -752,7 +803,7 @@ function formatMarkdown(markdown: string): string {
   return markdown
     .replace(
       /\*\*(.*?)\*\*/g,
-      '<strong style="color: var(--accent-emerald);">$1</strong>',
+      '<strong style="color: var(--accent-teal);">$1</strong>',
     )
     .replace(
       /(?:^|\n)\* (.*?)(?=\n|$)/g,
@@ -948,6 +999,34 @@ function updateLanguageButtons(): void {
   );
 }
 
+function initTextScale(): void {
+  const savedScale = localStorage.getItem("nequ3d.textScale");
+  const scale =
+    savedScale === "sm" || savedScale === "md" || savedScale === "lg"
+      ? savedScale
+      : "md";
+  setTextScale(scale);
+}
+
+function setTextScale(scale: TextScale): void {
+  activeTextScale = scale;
+  document.documentElement.style.setProperty(
+    "--base-font-size",
+    TEXT_SCALE_OPTIONS[scale],
+  );
+  localStorage.setItem("nequ3d.textScale", scale);
+  updateTextScaleButtons();
+}
+
+function updateTextScaleButtons(): void {
+  (["sm", "md", "lg"] as const).forEach((scale) => {
+    getEl<HTMLButtonElement>(`btn-size-${scale}`).classList.toggle(
+      "active",
+      activeTextScale === scale,
+    );
+  });
+}
+
 function initTheme(): void {
   const savedTheme = localStorage.getItem("nequ3d.theme");
   const theme = savedTheme === "light" ? "light" : "dark";
@@ -1004,3 +1083,60 @@ function clamp(value: number, min: number, max: number): number {
 }
 
 initUI();
+
+function renderTelemetryHTML(data: any): string {
+  if (!data || typeof data !== "object") return String(data);
+  let html = '<table style="width: 100%; border-collapse: collapse; font-size: 0.85rem; text-align: left;">';
+  
+  const translations: Record<string, Record<string, string>> = {
+    schema_version: { en: "Schema Version", pl: "Wersja Schematu" },
+    status: { en: "Status", pl: "Status" },
+    total_prim_count: { en: "Total Prim Count", pl: "Liczba Obiektów (Prims)" },
+    mesh_count: { en: "Mesh Count", pl: "Liczba Siatek" },
+    material_count: { en: "Material Count", pl: "Liczba Materiałów" },
+    total_vertices: { en: "Total Vertices", pl: "Suma Wierzchołków" },
+    total_faces: { en: "Total Faces", pl: "Suma Wielokątów" },
+    prim_names: { en: "Prim Names", pl: "Nazwy Obiektów" },
+    texture_count: { en: "Texture Count", pl: "Liczba Tekstur" },
+    ntc_compressed_files: { en: "Compressed Textures (NTC)", pl: "Skompresowane Tekstury (NTC)" },
+    original: { en: "Original File", pl: "Plik Oryginalny" },
+    compression_time_sec: { en: "Compression Time (s)", pl: "Czas Kompresji (s)" },
+    raw_vram_mb: { en: "Raw VRAM (MB)", pl: "Surowe VRAM (MB)" },
+    ntc_vram_mb: { en: "NTC VRAM (MB)", pl: "NTC VRAM (MB)" },
+    vram_saved_mb: { en: "VRAM Saved (MB)", pl: "Zaoszczędzone VRAM (MB)" },
+    vram_reduction: { en: "VRAM Reduction", pl: "Redukcja VRAM" },
+    metrics: { en: "Metrics", pl: "Metryki" },
+    ntc_bypassed: { en: "NTC Bypassed", pl: "Pominięto NTC" },
+    ntc_bypass_reason: { en: "Bypass Reason", pl: "Powód Pominięcia" },
+    has_ntc_quality: { en: "Has NTC Quality", pl: "Posiada Jakość NTC" },
+    texture_processing_status: { en: "Processing Status", pl: "Status Przetwarzania" },
+    proxy_glb_path: { en: "Proxy GLB Path", pl: "Ścieżka Proxy GLB" },
+  };
+
+  for (const [key, value] of Object.entries(data)) {
+    if (key === "raw_telemetry") continue;
+    let displayValue = value;
+    if (typeof value === "object" && value !== null) {
+      if (Array.isArray(value)) {
+        displayValue = value.map(v => typeof v === "object" ? renderTelemetryHTML(v) : v).join("<br/>");
+      } else {
+        displayValue = renderTelemetryHTML(value);
+      }
+    }
+    
+    // Fallback to formatted key if translation is missing
+    const lang = (window as any).IntLayer?.currentLang || "en";
+    let formattedKey = translations[key]?.[lang];
+    if (!formattedKey) {
+      formattedKey = key.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+    }
+
+    html += `<tr style="border-bottom: 1px solid var(--border-color);">
+      <td style="padding: 6px 4px; color: var(--text-secondary); white-space: nowrap; vertical-align: top;">${formattedKey}</td>
+      <td style="padding: 6px 4px; font-family: monospace; color: var(--accent-teal); word-break: break-all;">${displayValue}</td>
+    </tr>`;
+  }
+  html += '</table>';
+  return html;
+}
+

@@ -33,6 +33,7 @@ type OllamaResponse struct {
 
 type AdvicePayload struct {
 	Model              string          `json:"model"`
+	Language           string          `json:"language"`
 	AnalysisMode       string          `json:"analysis_mode"`
 	NTCBypassed        bool            `json:"ntc_bypassed"`
 	InstructionContext string          `json:"instruction_context"`
@@ -56,11 +57,16 @@ func NewApp() *App {
 // GenerateRenovationAdvice sends a request to the local Ollama API to generate renovation advice based on telemetry data
 func (a *App) GenerateRenovationAdvice(telemetryJSON string) (string, error) {
 	model, telemetryForPrompt, _ := normalizeAdvicePayload(telemetryJSON)
-
 	// Task 2: Pre-compute NTC logic in Go for the LLM
-	var telemetryMap map[string]interface{}
+	var telemetryMap map[string]any
 	if err := json.Unmarshal([]byte(telemetryForPrompt), &telemetryMap); err != nil {
 		return "", fmt.Errorf("failed to unmarshal telemetry for advice: %v", err)
+	}
+
+	language, _ := telemetryMap["language"].(string)
+	language = strings.TrimSpace(language)
+	if language == "" {
+		language = "English"
 	}
 
 	ntcBypassed, _ := telemetryMap["ntc_bypassed"].(bool)
@@ -76,6 +82,7 @@ func (a *App) GenerateRenovationAdvice(telemetryJSON string) (string, error) {
 
 	// Task 3: Strict Anti-Conversational Prompt
 	prompt := fmt.Sprintf(`You are a robotic data formatter. Output EXACTLY 3 bullet points.
+CRITICAL: You must write your entire response STRICTLY in %s.
 CRITICAL: DO NOT start with "Sure, here are..." or any conversational text. ONLY output the bullets.
 
 - Bullet 1: "Object: [deduce name from file_path or prim_names]"
@@ -83,7 +90,7 @@ CRITICAL: DO NOT start with "Sure, here are..." or any conversational text. ONLY
 - Bullet 3: "%s"
 
 JSON DATA:
-%s`, compressionStr, telemetryForPrompt)
+%s`, language, compressionStr, telemetryForPrompt)
 
 	reqBody := OllamaRequest{
 		Model:  model,
@@ -133,10 +140,28 @@ func normalizeAdvicePayload(payload string) (string, string, string) {
 		} else if structured.RawTelemetry != "" {
 			telemetry = structured.RawTelemetry
 		}
+		if language := strings.TrimSpace(structured.Language); language != "" {
+			telemetry = injectAdviceLanguage(telemetry, language)
+		}
 		return model, telemetry, context
 	}
 
 	return model, telemetry, context
+}
+
+func injectAdviceLanguage(telemetry string, language string) string {
+	var telemetryMap map[string]any
+	if err := json.Unmarshal([]byte(telemetry), &telemetryMap); err != nil {
+		return telemetry
+	}
+
+	telemetryMap["language"] = language
+	normalizedTelemetry, err := json.Marshal(telemetryMap)
+	if err != nil {
+		return telemetry
+	}
+
+	return string(normalizedTelemetry)
 }
 
 func sanitizeOllamaModel(model string) string {
