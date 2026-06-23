@@ -34,7 +34,7 @@ Processing pipeline designed for mobile mapping and reality capture telemetry, l
 
 ## What Is It?
 
-<img width="1401" height="848" alt="nequ3d_demo" src="https://github.com/user-attachments/assets/12934a36-fe67-4e29-976c-b6e27a28f5e7">
+<img width="2542" height="1391" alt="nequ3d-app" src="https://github.com/user-attachments/assets/27566edf-8846-449a-b866-1de25f5b2a7c" />
 
 The platform transforms raw reality-capture datasets into optimized OpenUSD scenes suitable for visualization, analytics, and long-term archival.
 
