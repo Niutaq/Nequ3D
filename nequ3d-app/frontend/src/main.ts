@@ -191,12 +191,13 @@ style.textContent = `
   .view-tab.active { color: var(--accent-teal); background: var(--bg-panel); box-shadow: inset 0 -2px 0 var(--accent-teal); }
 
   .viewer-layer { position: absolute; inset: 0; width: 100%; height: 100%; }
-  .comparison-wrapper { display: flex; align-items: center; justify-content: center; overflow: hidden; position: absolute; inset: 0; background: #000; }
-  .comparison-layer { position: relative; display: inline-flex; max-width: 100%; max-height: 100%; }
-  .comp-img { object-fit: contain; max-width: 100%; max-height: 100%; display: block; }
+  .comparison-wrapper { display: block; overflow: hidden; position: absolute; inset: 0; background: #000; }
+  .comparison-layer { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .comp-img { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
   .img-after { position: absolute; inset: 0; z-index: 2; }
-  .comp-slider { position: absolute; top: 0; left: 0; width: 100%; height: 100%; opacity: 0; cursor: ew-resize; z-index: 10; margin: 0; }
-  .comp-divider { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--accent-teal); pointer-events: none; z-index: 5; box-shadow: 0 0 10px var(--accent-teal); }
+  .comp-slider { display: none; }
+  .comp-divider { position: absolute; top: 0; bottom: 0; width: 4px; margin-left: -2px; background: var(--accent-teal); pointer-events: auto; cursor: ew-resize; z-index: 10; box-shadow: 0 0 10px var(--accent-teal); display: flex; align-items: center; justify-content: center; }
+  .comp-divider::after { content: ""; background: var(--bg-panel); color: var(--accent-teal); border: 2px solid var(--accent-teal); border-radius: 50%; width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: bold; }
 
   .viewer-placeholder { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; color: var(--text-muted); font-family: var(--font-mono); text-transform: uppercase; letter-spacing: 0.2em; gap: 20px; }
 
@@ -251,10 +252,17 @@ const Icons = {
 let currentAbsolutePath = "";
 let currentModelDir = "";
 let currentBpp = "5";
+let currentSteps = "150";
 let activeMode: ViewerMode = "mesh";
 let activeTextScale: TextScale = "md";
 let timerInterval: number | null = null;
+let fpsFrames = 0;
+let lastFpsTime = performance.now();
 let qualityAvailable = false;
+
+// Global state to allow re-translating telemetry and LLM without re-running analysis
+let currentRawTelemetry: string | null = null;
+let currentTelemetryData: any = null;
 
 const comparisonState = {
   split: 50,
@@ -315,6 +323,12 @@ function initUI(): void {
             <span id="bpp-val" class="telemetry-value" style="font-size: 0.8rem; color: var(--accent-teal);"></span>
           </div>
           <input type="range" id="bpp-slider" min="1" max="8" step="1" value="5">
+
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 8px;">
+            <span class="telemetry-label">Training Steps</span>
+            <span id="steps-val" class="telemetry-value" style="font-size: 0.8rem; color: var(--accent-teal);"></span>
+          </div>
+          <input type="range" id="steps-slider" min="50" max="1000" step="50" value="150">
         </div>
 
         <div class="panel-section">
@@ -344,6 +358,7 @@ function initUI(): void {
         <div class="viewer-tabs">
           <button id="tab-mesh" class="view-tab active" data-i18n="tabMesh"></button>
           <button id="tab-quality" class="view-tab" data-i18n="tabQuality" hidden></button>
+          <div id="fps-counter" style="margin-left: auto; padding: 14px 28px; font-family: var(--font-mono); font-size: 0.7rem; color: var(--accent-teal); font-weight: bold;">0 FPS</div>
         </div>
 
         <div id="viewer-placeholder" class="viewer-placeholder">
@@ -355,10 +370,9 @@ function initUI(): void {
 
         <div id="viewer-quality" class="comparison-wrapper" style="display: none;">
           <div id="comparison-layer" class="comparison-layer">
-              <img id="img-orig" class="comp-img" alt="">
-              <canvas id="canvas-ntc" class="comp-img img-after"></canvas>
+              <model-viewer id="viewer-orig" class="comp-img" camera-controls exposure="1.05" shadow-intensity="0.6" style="width: 100%; height: 100%;"></model-viewer>
+              <model-viewer id="viewer-ntc" class="comp-img img-after" disable-zoom disable-pan disable-tap exposure="1.05" shadow-intensity="0.6" style="width: 100%; height: 100%; pointer-events: none;"></model-viewer>
               <div id="comp-divider" class="comp-divider"></div>
-              <input type="range" min="0" max="100" value="50" class="comp-slider" id="compare-slider">
 
               <div class="telemetry-label" style="position: absolute; top: 60px; left: 20px; z-index: 9999; background: rgba(15, 23, 42, 0.8); backdrop-filter: blur(4px); border-radius: 4px; padding: 6px 12px; pointer-events: none; border: 1px solid var(--border-color);" data-i18n="origLabel"></div>
               <div class="telemetry-label" style="position: absolute; top: 60px; right: 20px; z-index: 9999; background: rgba(15, 23, 42, 0.8); backdrop-filter: blur(4px); border-radius: 4px; padding: 6px 12px; pointer-events: none; border: 1px solid var(--border-color);" data-i18n="ntcLabel"></div>
@@ -389,12 +403,51 @@ function initUI(): void {
   attachEventListeners();
   initResizablePanels();
   initComparisonResize();
+  startFpsCounter();
+}
+
+function startFpsCounter() {
+    const fpsEl = getEl("fps-counter");
+    function loop() {
+        fpsFrames++;
+        const now = performance.now();
+        if (now - lastFpsTime >= 1000) {
+            if (fpsEl) fpsEl.textContent = `${Math.round((fpsFrames * 1000) / (now - lastFpsTime))} FPS`;
+            fpsFrames = 0;
+            lastFpsTime = now;
+        }
+        requestAnimationFrame(loop);
+    }
+    requestAnimationFrame(loop);
 }
 
 function attachEventListeners(): void {
   const selectBtn = getEl<HTMLButtonElement>("select-btn");
   const analyzeBtn = getEl<HTMLButtonElement>("analyze-btn");
-  const compareSlider = getEl<HTMLInputElement>("compare-slider");
+  const divider = getEl<HTMLDivElement>("comp-divider");
+  const compLayer = getEl<HTMLDivElement>("comparison-layer");
+
+  let isDraggingDivider = false;
+
+  divider.addEventListener("pointerdown", (e) => {
+    isDraggingDivider = true;
+    divider.setPointerCapture(e.pointerId);
+    e.preventDefault();
+  });
+
+  divider.addEventListener("pointermove", (e) => {
+    if (!isDraggingDivider) return;
+    const rect = compLayer.getBoundingClientRect();
+    let split = ((e.clientX - rect.left) / rect.width) * 100;
+    split = clamp(split, 0, 100);
+    comparisonState.split = split;
+    syncComparisonLayout();
+  });
+
+  divider.addEventListener("pointerup", (e) => {
+    isDraggingDivider = false;
+    divider.releasePointerCapture(e.pointerId);
+  });
 
   getEl<HTMLButtonElement>("tab-mesh").addEventListener("click", () =>
     switchTab("mesh"),
@@ -405,6 +458,11 @@ function attachEventListeners(): void {
 
   getEl<HTMLInputElement>("bpp-slider").addEventListener("input", (event) => {
     currentBpp = (event.target as HTMLInputElement).value;
+    updateBppLabel();
+  });
+
+  getEl<HTMLInputElement>("steps-slider").addEventListener("input", (event) => {
+    currentSteps = (event.target as HTMLInputElement).value;
     updateBppLabel();
   });
 
@@ -428,9 +486,19 @@ function attachEventListeners(): void {
     toggleTheme,
   );
 
-  compareSlider.addEventListener("input", (event) => {
-    comparisonState.split = Number((event.target as HTMLInputElement).value);
-    syncComparisonLayout();
+
+
+  const viewerOrig = getEl<any>("viewer-orig");
+  const viewerNtc = getEl<any>("viewer-ntc");
+  viewerOrig.addEventListener("camera-change", () => {
+    if (activeMode !== "quality") return;
+    try {
+      viewerNtc.cameraOrbit = viewerOrig.getCameraOrbit().toString();
+      viewerNtc.cameraTarget = viewerOrig.getCameraTarget().toString();
+      viewerNtc.fieldOfView = viewerOrig.getFieldOfView().toString();
+    } catch (e) {
+      // Model not ready yet
+    }
   });
 
   try {
@@ -534,8 +602,10 @@ async function runAnalysis(): Promise<void> {
   }, 100);
 
   try {
-    const result = await ProcessModel(currentAbsolutePath, currentBpp);
+    const result = await ProcessModel(currentAbsolutePath, currentBpp, currentSteps);
     const parsedJson = parseTelemetry(result);
+    currentRawTelemetry = result;
+    currentTelemetryData = parsedJson;
     await hydrateViewers(parsedJson);
     outputPre.innerHTML = renderTelemetryHTML(parsedJson);
     analyzeBtn.innerHTML = '<span data-i18n="btnAnalyzeSuccess"></span>';
@@ -564,6 +634,27 @@ async function hydrateViewers(telemetry: PipelineTelemetry): Promise<void> {
     viewerUSD.src = meshUrl;
     viewerUSD.style.display = "block";
     viewerPlaceholder.style.display = "none";
+    
+    // Fix trimesh black base color export and apply texture
+    viewerUSD.addEventListener('load', async () => {
+      const material = viewerUSD.model?.materials[0];
+      if (material) {
+        material.pbrMetallicRoughness.setBaseColorFactor([1, 1, 1, 1]);
+        
+        // Load original texture for the MESH tab
+        const originalPath = telemetry.ntc_compressed_files[0]?.original_path;
+        if (originalPath) {
+            try {
+                const hostPath = toHostPath(originalPath);
+                const texUrl = localFileUrl(hostPath);
+                const texture = await viewerUSD.createTexture(`${texUrl}&cb=${Date.now()}`);
+                material.pbrMetallicRoughness.baseColorTexture.setTexture(texture);
+            } catch (e) {
+                console.warn("[Nequ3D] Failed to apply texture to MESH tab", e);
+            }
+        }
+      }
+    }, { once: true });
   } else {
     viewerUSD.src = "";
     viewerUSD.style.display = "none";
@@ -579,48 +670,61 @@ async function hydrateQualityViewer(
 ): Promise<void> {
   const qualityAsset = findQualityAsset(telemetry);
 
-  if (!qualityAsset?.original_path) {
+  if (!qualityAsset?.original_path || !qualityAsset?.reconstructed_path) {
     setQualityAvailability(false);
     return;
   }
 
   const originalPath = toHostPath(qualityAsset.original_path);
-  if (!originalPath) {
+  const reconstructedPath = toHostPath(qualityAsset.reconstructed_path);
+  const glbPath = resolveMeshPath(telemetry);
+
+  if (!originalPath || !reconstructedPath || !glbPath) {
     setQualityAvailability(false);
     return;
   }
 
-  await setQualityTextures(localFileUrl(originalPath));
+  await setQualityTextures(localFileUrl(originalPath), localFileUrl(reconstructedPath), localFileUrl(glbPath));
 }
 
-async function setQualityTextures(originalUrl: string): Promise<void> {
-  const imgOrig = getEl<HTMLImageElement>("img-orig");
-  const canvasNtc = getEl<HTMLCanvasElement>("canvas-ntc");
+async function setQualityTextures(originalUrl: string, reconstructedUrl: string, glbUrl: string): Promise<void> {
+  const viewerOrig = getEl<any>("viewer-orig");
+  const viewerNtc = getEl<any>("viewer-ntc");
 
   setQualityAvailability(true);
 
-  const cacheUrl = `${originalUrl}&cb=${Date.now()}`;
-  const originalImage = await loadImage(cacheUrl).catch((error) => {
-    console.warn("[Nequ3D] Quality original texture load skipped.", error);
-    return null;
-  });
-  if (!originalImage) return;
-
-  const naturalWidth = originalImage.naturalWidth || originalImage.width;
-  const naturalHeight = originalImage.naturalHeight || originalImage.height;
   comparisonState.split = 50;
-  getEl<HTMLInputElement>("compare-slider").value = "50";
 
-  imgOrig.src = cacheUrl;
-  canvasNtc.width = naturalWidth;
-  canvasNtc.height = naturalHeight;
+  viewerOrig.src = glbUrl;
+  viewerNtc.src = glbUrl;
 
-  const ctx = canvasNtc.getContext("2d", { willReadFrequently: true });
-  if (ctx) {
-    drawNtcSimulation(ctx, originalImage, currentBpp);
-  }
+  const applyTexture = async (viewer: any, textureUrl: string) => {
+    try {
+      const material = viewer.model?.materials[0];
+      if (material) {
+        material.pbrMetallicRoughness.setBaseColorFactor([1, 1, 1, 1]);
+        const texture = await viewer.createTexture(`${textureUrl}&cb=${Date.now()}`);
+        material.pbrMetallicRoughness.baseColorTexture.setTexture(texture);
+      }
+    } catch (e) {
+      console.warn("[Nequ3D] Failed to apply texture to model-viewer", e);
+    }
+  };
+
+  viewerOrig.addEventListener('load', () => applyTexture(viewerOrig, originalUrl), { once: true });
+  viewerNtc.addEventListener('load', () => applyTexture(viewerNtc, reconstructedUrl), { once: true });
+  
+  viewerOrig.addEventListener('camera-change', () => {
+    const orbit = viewerOrig.getCameraOrbit();
+    const target = viewerOrig.getCameraTarget();
+    const fov = viewerOrig.getFieldOfView();
+    viewerNtc.cameraOrbit = `${orbit.theta}rad ${orbit.phi}rad ${orbit.radius}m`;
+    viewerNtc.cameraTarget = `${target.x}m ${target.y}m ${target.z}m`;
+    viewerNtc.fieldOfView = `${fov}deg`;
+  });
+
   syncComparisonLayout();
-}
+};
 
 function drawNtcSimulation(
   ctx: CanvasRenderingContext2D,
@@ -672,13 +776,13 @@ function drawNtcSimulation(
 
 function syncComparisonLayout(): void {
   const layer = getEl<HTMLDivElement>("comparison-layer");
-  const canvasNtc = getEl<HTMLCanvasElement>("canvas-ntc");
+  const viewerNtc = getEl<HTMLElement>("viewer-ntc");
   const divider = getEl<HTMLDivElement>("comp-divider");
   const split = clamp(comparisonState.split, 0, 100);
 
   layer.style.setProperty("--split", `${split}%`);
   divider.style.left = `${split}%`;
-  canvasNtc.style.clipPath = `polygon(${split}% 0, 100% 0, 100% 100%, ${split}% 100%)`;
+  viewerNtc.style.clipPath = `polygon(${split}% 0, 100% 0, 100% 100%, ${split}% 100%)`;
 }
 
 function switchTab(mode: ViewerMode): void {
@@ -707,7 +811,7 @@ function switchTab(mode: ViewerMode): void {
   if (mode === "quality") {
     getEl<HTMLButtonElement>("tab-quality").classList.add("active");
     if (qualityAvailable) {
-      qualityLayer.style.display = "grid";
+      qualityLayer.style.display = "block";
       syncComparisonLayout();
     } else {
       placeholder.style.display = "flex";
@@ -983,9 +1087,21 @@ function getSelectedModel(): ModelChoice {
 }
 
 function setLanguage(lang: Language): void {
+  if (IntLayer.currentLang === lang) return;
   IntLayer.setLanguage(lang);
   updateLanguageButtons();
   updateBppLabel();
+
+  // Re-render telemetry immediately in new language
+  if (currentTelemetryData) {
+    const outputPre = getEl<HTMLElement>("output");
+    outputPre.innerHTML = renderTelemetryHTML(currentTelemetryData);
+  }
+
+  // Re-run LLM advice immediately in new language
+  if (currentRawTelemetry && currentTelemetryData) {
+    runAdvice(currentRawTelemetry, currentTelemetryData);
+  }
 }
 
 function updateLanguageButtons(): void {
@@ -1033,9 +1149,41 @@ function initTheme(): void {
   applyTheme(theme);
 }
 
-function toggleTheme(): void {
+function toggleTheme(event?: MouseEvent): void {
   const nextTheme = document.body.dataset.theme === "light" ? "dark" : "light";
-  applyTheme(nextTheme);
+  
+  if (!document.startViewTransition || !event) {
+    applyTheme(nextTheme);
+    return;
+  }
+
+  const x = event.clientX;
+  const y = event.clientY;
+  const endRadius = Math.hypot(
+    Math.max(x, innerWidth - x),
+    Math.max(y, innerHeight - y)
+  );
+
+  const transition = document.startViewTransition(() => {
+    applyTheme(nextTheme);
+  });
+
+  transition.ready.then(() => {
+    const clipPath = [
+      `circle(0px at ${x}px ${y}px)`,
+      `circle(${endRadius}px at ${x}px ${y}px)`
+    ];
+    document.documentElement.animate(
+      {
+        clipPath: nextTheme === "dark" ? clipPath.reverse() : clipPath,
+      },
+      {
+        duration: 500,
+        easing: "ease-in",
+        pseudoElement: nextTheme === "dark" ? "::view-transition-old(root)" : "::view-transition-new(root)",
+      }
+    );
+  });
 }
 
 function applyTheme(theme: string): void {
@@ -1048,6 +1196,11 @@ function applyTheme(theme: string): void {
 function updateBppLabel(): void {
   getEl<HTMLSpanElement>("bpp-val").textContent =
     `${currentBpp} ${IntLayer.t.bppUnit}`;
+    
+  const stepsVal = getEl<HTMLSpanElement>("steps-val");
+  if (stepsVal) {
+    stepsVal.textContent = currentSteps;
+  }
 }
 
 function requestViewerResize(): void {
@@ -1125,7 +1278,7 @@ function renderTelemetryHTML(data: any): string {
     }
     
     // Fallback to formatted key if translation is missing
-    const lang = (window as any).IntLayer?.currentLang || "en";
+    const lang = IntLayer.currentLang || "en";
     let formattedKey = translations[key]?.[lang];
     if (!formattedKey) {
       formattedKey = key.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());

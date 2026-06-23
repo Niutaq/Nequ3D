@@ -24,10 +24,11 @@ export function GenerateRenovationAdvice(telemetryJSON) {
  * ProcessModel triggers the Docker pipeline for USD analysis or bypasses for GLB
  * @param {string} absolutePath
  * @param {string} bpp
+ * @param {string} steps
  * @returns {$CancellablePromise<string>}
  */
-export function ProcessModel(absolutePath, bpp) {
-    return $Call.ByID(4139425631, absolutePath, bpp);
+export function ProcessModel(absolutePath, bpp, steps) {
+    return $Call.ByID(4139425631, absolutePath, bpp, steps);
 }
 
 /**

@@ -53,6 +53,27 @@ The processing workflow enables:
 
 Before running the system, install the required tooling.
 
+## Ollama (Local LLM Engine)
+
+To enable the AI-assisted telemetry analysis and reporting, you must install Ollama and pull the required models to your local machine.
+
+### Installation
+
+https://ollama.com/download
+
+After installing Ollama, pull the models used by the application (you can choose which ones to use in the UI):
+
+```bash
+ollama pull gemma2
+ollama pull llama3
+ollama pull mistral
+ollama pull llava
+```
+
+Verify your installation by ensuring the Ollama service is running on port `11434`.
+
+---
+
 ## Docker
 
 Docker is used to build and execute the isolated OpenUSD processing environment.

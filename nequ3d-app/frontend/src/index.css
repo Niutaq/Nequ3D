@@ -1,0 +1,54 @@
+
+/* View Transitions for Theme Toggle */
+::view-transition-old(root), ::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}
+::view-transition-old(root) {
+  z-index: 1;
+}
+::view-transition-new(root) {
+  z-index: 9999;
+}
+.dark::view-transition-old(root) {
+  z-index: 9999;
+}
+.dark::view-transition-new(root) {
+  z-index: 1;
+}
+
+.technical-button:not(:disabled) {
+  transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+  position: relative;
+  overflow: hidden;
+}
+
+.technical-button:not(:disabled)::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 150%;
+  height: 150%;
+  background: radial-gradient(circle, rgba(20, 184, 166, 0.2) 0%, transparent 60%);
+  transform: translate(-50%, -50%) scale(0);
+  transition: transform 0.4s ease-out;
+  border-radius: 50%;
+  pointer-events: none;
+}
+
+.technical-button:not(:disabled):hover::after {
+  transform: translate(-50%, -50%) scale(1);
+}
+
+.technical-button:not(:disabled):hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 15px rgba(20, 184, 166, 0.3);
+  border-color: var(--accent-teal);
+  color: var(--accent-teal);
+}
+
+.technical-button:not(:disabled):active {
+  transform: translateY(1px);
+  box-shadow: 0 2px 5px rgba(20, 184, 166, 0.2);
+}

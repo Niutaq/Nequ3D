@@ -5,9 +5,11 @@ import subprocess
 import sys
 import time
 import zipfile  # Built-in library for ZIP/USDZ handling
+import uuid
 
 import numpy as np
 import trimesh
+from PIL import Image
 from pxr import Usd, UsdGeom, UsdShade  # type: ignore
 
 
@@ -48,23 +50,54 @@ def unpack_usdz(usdz_path):
     return usdz_path
 
 
-def generate_proxy_mesh(usd_path):
+def get_texture_for_prim(prim):
+    mat, _ = UsdShade.MaterialBindingAPI(prim).ComputeBoundMaterial()
+    if not mat:
+        return None
+    for s_prim in prim.GetStage().Traverse():
+        if s_prim.IsA(UsdShade.Shader) and s_prim.GetPath().HasPrefix(mat.GetPath()):
+            shader = UsdShade.Shader(s_prim)
+            if shader.GetIdAttr().Get() == "UsdUVTexture":
+                file_attr = shader.GetInput("file")
+                if file_attr:
+                    tex = str(file_attr.Get())
+                    if tex.startswith("@") and tex.endswith("@"):
+                        tex = tex[1:-1]
+                    return tex
+    return None
+
+def build_material(img_path):
+    mat_name = f"mat_{uuid.uuid4().hex}"
+    kwargs = {
+        "name": mat_name,
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.8,
+        "baseColorFactor": [255, 255, 255, 255]
+    }
+    if img_path and os.path.exists(img_path):
+        try:
+            kwargs["baseColorTexture"] = Image.open(img_path)
+        except Exception:
+            pass
+    return trimesh.visual.material.PBRMaterial(**kwargs)
+
+def generate_proxy_mesh(usd_path, suffix="_proxy.glb", use_reconstructed=False):
     """
     Generates a lightweight .glb (.gltf) structural proxy directly via Pixar API.
-    Extracts vertices and faces, triangulates them on the fly, and exports to GLB.
+    Properly handles GeomSubsets and embeds textures.
     """
-    proxy_path = usd_path.rsplit(".", 1)[0] + "_proxy.glb"
-    print(
-        f"[Core Python] Generowanie strukturalnego proxy GLB natywnie przez API Pixara: {usd_path}"
-    )
+    proxy_path = usd_path.rsplit(".", 1)[0] + suffix
+    print(f"[Core Python] Generating structural proxy GLB: {proxy_path} (Reconstructed: {use_reconstructed})")
 
     try:
         stage = Usd.Stage.Open(usd_path)
         if not stage:
-            print(f"[Core Python] Błąd: Nie można otworzyć sceny USD: {usd_path}")
+            print(f"[Core Python] Error: Could not open USD scene: {usd_path}")
             return None
 
+        base_dir = os.path.dirname(usd_path)
         meshes = []
+
         for prim in stage.Traverse():
             if prim.IsA(UsdGeom.Mesh):
                 mesh = UsdGeom.Mesh(prim)
@@ -75,42 +108,121 @@ def generate_proxy_mesh(usd_path):
                 if not points or not face_counts or not face_indices:
                     continue
 
-                vertices = np.array(points)
+                points = np.array(points)
                 counts = np.array(face_counts)
                 indices = np.array(face_indices)
 
-                faces = []
-                idx = 0
-                for count in counts:
-                    for i in range(1, count - 1):
-                        faces.append(
-                            [indices[idx], indices[idx + i], indices[idx + i + 1]]
-                        )
-                    idx += count
+                pv_api = UsdGeom.PrimvarsAPI(prim)
+                st_primvar = None
+                for uv_name in ["st", "st0", "uv", "uv0"]:
+                    pv = pv_api.GetPrimvar(uv_name)
+                    if pv and pv.HasValue():
+                        st_primvar = pv
+                        break
 
-                if faces:
-                    tri_mesh = trimesh.Trimesh(vertices=vertices, faces=faces)
+                uv_data = None
+                uv_indices = None
+                is_face_varying = False
+                if st_primvar and st_primvar.HasValue():
+                    uv_data = np.array(st_primvar.Get())
+                    if st_primvar.GetInterpolation() == UsdGeom.Tokens.faceVarying:
+                        st_ind = st_primvar.GetIndices()
+                        uv_indices = np.array(st_ind) if st_ind else indices
+                        is_face_varying = True
+
+                triangulated_faces = []
+                original_face_to_triangles = {}
+
+                if is_face_varying:
+                    unrolled_vertices = points[indices]
+                    unrolled_uvs = uv_data[uv_indices]
+
+                    idx = 0
+                    tri_idx = 0
+                    for face_i, count in enumerate(counts):
+                        face_tris = []
+                        for i in range(1, count - 1):
+                            triangulated_faces.append([idx, idx + i, idx + i + 1])
+                            face_tris.append(tri_idx)
+                            tri_idx += 1
+                        original_face_to_triangles[face_i] = face_tris
+                        idx += count
+
+                    points_out = unrolled_vertices
+                    uvs_out = unrolled_uvs
+                else:
+                    idx = 0
+                    tri_idx = 0
+                    for face_i, count in enumerate(counts):
+                        face_tris = []
+                        for i in range(1, count - 1):
+                            triangulated_faces.append([indices[idx], indices[idx + i], indices[idx + i + 1]])
+                            face_tris.append(tri_idx)
+                            tri_idx += 1
+                        original_face_to_triangles[face_i] = face_tris
+                        idx += count
+
+                    points_out = points
+                    uvs_out = uv_data if uv_data is not None and len(uv_data) == len(points) else None
+
+                triangulated_faces = np.array(triangulated_faces)
+                subsets = [p for p in prim.GetChildren() if p.IsA(UsdGeom.Subset)]
+
+                if subsets:
+                    for sub in subsets:
+                        subset = UsdGeom.Subset(sub)
+                        sub_indices = subset.GetIndicesAttr().Get()
+
+                        sub_tris = []
+                        for orig_f in sub_indices:
+                            sub_tris.extend(original_face_to_triangles[orig_f])
+
+                        if not sub_tris:
+                            continue
+
+                        faces_subset = triangulated_faces[sub_tris]
+                        tri_mesh = trimesh.Trimesh(vertices=points_out, faces=faces_subset, process=False)
+                        if uvs_out is not None:
+                            tri_mesh.visual = trimesh.visual.TextureVisuals(uv=uvs_out)
+
+                        tex = get_texture_for_prim(sub)
+                        img_path = os.path.join(base_dir, tex) if tex else None
+                        if img_path and use_reconstructed:
+                            img_path = img_path + "_reconstructed.png"
+                        
+                        tri_mesh.visual.material = build_material(img_path)
+                        meshes.append(tri_mesh)
+                else:
+                    tri_mesh = trimesh.Trimesh(vertices=points_out, faces=triangulated_faces, process=False)
+                    if uvs_out is not None:
+                        tri_mesh.visual = trimesh.visual.TextureVisuals(uv=uvs_out)
+
+                    tex = get_texture_for_prim(prim)
+                    img_path = os.path.join(base_dir, tex) if tex else None
+                    if img_path and use_reconstructed:
+                        img_path = img_path + "_reconstructed.png"
+
+                    tri_mesh.visual.material = build_material(img_path)
                     meshes.append(tri_mesh)
 
         if meshes:
-            combined = trimesh.util.concatenate(meshes)
-
+            scene = trimesh.Scene(meshes)
             transform = trimesh.transformations.rotation_matrix(np.pi / 2, [1, 0, 0])
-            combined.apply_transform(transform)
+            for node_name in scene.graph.nodes_geometry:
+                scene.graph.update(node_name, matrix=transform)
 
-            combined.export(proxy_path)
-            print(f"[Core Python] Sukces! Wygenerowano proxy GLB: {proxy_path}")
+            scene.export(proxy_path)
             return proxy_path
         else:
-            print("[Core Python] Brak geometrii typu Mesh w pliku USD.")
+            print("[Core Python] No Mesh geometry found in USD file.")
 
     except Exception as e:
-        print(f"[Core Python] Błąd przy natywnej ekstrakcji geometrii: {e}")
+        print(f"[Core Python] Error during native geometry extraction: {e}")
 
     return None
 
 
-def run_ntc_compression(usd_path, texture_paths, target_bpp):
+def run_ntc_compression(usd_path, texture_paths, target_bpp, target_steps="150"):
     """
     Executes the native C++ NVIDIA RTXNTC compressor compiled inside the Docker container.
     """
@@ -166,7 +278,7 @@ def run_ntc_compression(usd_path, texture_paths, target_bpp):
             "-b",
             str(target_bpp),
             "-S",
-            "150",
+            str(target_steps),
         ]
 
         try:
@@ -181,14 +293,26 @@ def run_ntc_compression(usd_path, texture_paths, target_bpp):
             reduction = 100 - ((ntc_size_mb / raw_vram_mb) * 100)
 
             reconstructed_img_path = actual_tex_path + "_reconstructed.png"
+            
+            # Extract to a subfolder to grab the actual decompressed image
+            import shutil
+            extract_dir = actual_tex_path + "_extracted"
+            os.makedirs(extract_dir, exist_ok=True)
+            
             decompress_cmd = [
                 "ntc-cli",
                 output_ntc_file,
-                "-d",
-                "-o",
-                reconstructed_img_path,
+                "-i",
+                extract_dir,
+                "--imageFormat", "PNG"
             ]
-            subprocess.run(decompress_cmd, check=True, capture_output=True)
+            result = subprocess.run(decompress_cmd, check=True, capture_output=True, text=True)
+            
+            # Move the extracted PNG to the expected path
+            for f in os.listdir(extract_dir):
+                if f.lower().endswith(".png"):
+                    shutil.copy(os.path.join(extract_dir, f), reconstructed_img_path)
+                    break
 
             psnr_value = "N/A"
             for line in result.stdout.splitlines():
@@ -286,7 +410,7 @@ def summarize_ntc_state(telemetry, found_textures):
         )
 
 
-def analyze_usd_stage(file_path, target_bpp="5"):
+def analyze_usd_stage(file_path, target_bpp="5", target_steps="150"):
     """
     Analyzes the USD stage to extract mesh geometry and trigger material processing.
     """
@@ -310,6 +434,7 @@ def analyze_usd_stage(file_path, target_bpp="5"):
         "has_ntc_quality": False,
         "texture_processing_status": "pending",
         "proxy_glb_path": "",
+        "proxy_ntc_glb_path": "",
     }
 
     found_textures = []
@@ -348,15 +473,21 @@ def analyze_usd_stage(file_path, target_bpp="5"):
             f"[Core Python] Initialization: Physical NTC compression for {len(found_textures)} textures..."
         )
         telemetry["ntc_compressed_files"] = run_ntc_compression(
-            file_path, found_textures, target_bpp
+            file_path, found_textures, target_bpp, target_steps
         )
 
     summarize_ntc_state(telemetry, found_textures)
 
     print("[Core Python] Action: Generating Proxy Mesh (GLB) for Web Viewer...")
-    proxy_path = generate_proxy_mesh(file_path)
+    proxy_path = generate_proxy_mesh(file_path, suffix="_proxy.glb", use_reconstructed=False)
     if proxy_path:
         telemetry["proxy_glb_path"] = proxy_path
+
+    if telemetry["has_ntc_quality"]:
+        print("[Core Python] Action: Generating Proxy NTC Mesh (GLB)...")
+        proxy_ntc_path = generate_proxy_mesh(file_path, suffix="_proxy_ntc.glb", use_reconstructed=True)
+        if proxy_ntc_path:
+            telemetry["proxy_ntc_glb_path"] = proxy_ntc_path
 
     print("Telemetry: " + json.dumps(telemetry))
 
@@ -365,11 +496,12 @@ if __name__ == "__main__":
     if len(sys.argv) > 1:
         raw_path = sys.argv[1]
         bpp_target = sys.argv[2] if len(sys.argv) > 2 else "5"
+        steps_target = sys.argv[3] if len(sys.argv) > 3 else "150"
 
         # Automatic USDZ archive extraction
         working_path = unpack_usdz(raw_path)
 
-        analyze_usd_stage(working_path, bpp_target)
+        analyze_usd_stage(working_path, bpp_target, steps_target)
     else:
         print("[ERROR] Missing input file path")
         sys.exit(1)

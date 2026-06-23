@@ -249,13 +249,17 @@ func queryNVIDIAStats() SystemStats {
 }
 
 // ProcessModel triggers the Docker pipeline for USD analysis or bypasses for GLB
-func (a *App) ProcessModel(absolutePath string, bpp string) (string, error) {
+func (a *App) ProcessModel(absolutePath string, bpp string, steps string) (string, error) {
 	if absolutePath == "" {
 		return "", fmt.Errorf("absolute path is empty")
 	}
 
 	if bpp == "" {
 		return "", fmt.Errorf("bpp is empty")
+	}
+
+	if steps == "" {
+		steps = "150"
 	}
 
 	// 1. FAST TRACK: If WebGL format (GLB/GLTF), bypass Core processing
@@ -311,6 +315,7 @@ func (a *App) ProcessModel(absolutePath string, bpp string) (string, error) {
 		"python3", "/app/process_usd_file.py",
 		fmt.Sprintf("/workspace/%s", fileName),
 		bpp,
+		steps,
 	}
 
 	cmd := exec.Command("docker", cmdArgs...)
