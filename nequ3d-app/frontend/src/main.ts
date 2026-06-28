@@ -8,9 +8,11 @@ import {
 import "@google/model-viewer";
 import { Events } from "@wailsio/runtime";
 import { IntLayer, type Language } from "./i18n";
+import { Chart, registerables } from "chart.js";
+Chart.register(...registerables);
 
 type ViewerMode = "mesh" | "quality";
-type ModelChoice = "gemma:2b" | "llama3" | "mistral";
+type ModelChoice = "gemma:2b" | "llama3" | "mistral" | "llava";
 type TextScale = "sm" | "md" | "lg";
 
 type SysStats = {
@@ -201,26 +203,46 @@ style.textContent = `
 
   .viewer-placeholder { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; color: var(--text-muted); font-family: var(--font-mono); text-transform: uppercase; letter-spacing: 0.2em; gap: 20px; }
 
-  pre#output {
+  #output {
     flex: 1;
     min-height: 160px;
-    background: var(--bg-darker);
-    border: 1px solid var(--border-color);
-    border-radius: 8px;
-    box-shadow: inset 0 2px 4px rgba(0,0,0,0.1);
-    padding: 14px;
-    font-size: 0.6rem;
-    color: var(--accent-teal);
+    background: transparent;
     overflow: auto;
     margin: 0;
-    font-family: var(--font-mono);
     scrollbar-color: var(--border-color) transparent;
     scrollbar-width: thin;
   }
-  pre#output::-webkit-scrollbar { width: 8px; height: 8px; }
-  pre#output::-webkit-scrollbar-track { background: transparent; }
-  pre#output::-webkit-scrollbar-thumb { background: var(--border-color); border-radius: 999px; }
-  pre#output::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+  #output::-webkit-scrollbar { width: 8px; height: 8px; }
+  #output::-webkit-scrollbar-track { background: transparent; }
+  #output::-webkit-scrollbar-thumb { background: var(--border-color); border-radius: 999px; }
+  #output::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
+  .metric-card { background: var(--bg-darker); border: 1px solid var(--border-color); border-radius: 8px; padding: 16px; display: flex; flex-direction: column; gap: 6px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); }
+  .metric-title { font-family: var(--font-mono); font-size: 0.65rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; }
+  .metric-value { font-size: 1.4rem; font-weight: 800; color: var(--text-main); }
+  .metric-value.highlight { color: var(--accent-teal); }
+  .telemetry-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
+  .chart-container { background: var(--bg-darker); border: 1px solid var(--border-color); border-radius: 12px; padding: 16px; margin-top: 16px; display: flex; flex-direction: column; position: relative; }
+  .chart-canvas-wrapper { position: relative; height: 180px; width: 100%; display: flex; justify-content: center; }
+
+  #ai-output {
+    flex: 1;
+    overflow-y: auto;
+    padding-right: 12px;
+    font-size: 0.95rem;
+    line-height: 1.7;
+    color: var(--text-main);
+  }
+  .ai-insight-card {
+    background: linear-gradient(145deg, var(--bg-darker) 0%, rgba(13, 148, 136, 0.05) 100%);
+    border: 1px solid var(--border-color);
+    border-left: 4px solid var(--accent-teal);
+    border-radius: 10px;
+    padding: 20px;
+    margin-bottom: 16px;
+    box-shadow: 0 6px 16px rgba(0,0,0,0.15);
+    font-size: 1.05rem;
+  }
 
   .spinner { width: 16px; height: 16px; border: 2px solid rgba(160, 174, 192, 0.18); border-top-color: var(--accent-teal); border-radius: 50%; animation: spin 0.8s linear infinite; }
   @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
@@ -362,7 +384,6 @@ function initUI(): void {
         </div>
 
         <div id="viewer-placeholder" class="viewer-placeholder">
-          <div style="font-size: 50px; opacity: 0.2;">${Icons.box}</div>
           <div data-i18n="viewerEmptyTitle"></div>
         </div>
 
@@ -608,6 +629,7 @@ async function runAnalysis(): Promise<void> {
     currentTelemetryData = parsedJson;
     await hydrateViewers(parsedJson);
     outputPre.innerHTML = renderTelemetryHTML(parsedJson);
+    initTelemetryCharts(parsedJson);
     analyzeBtn.innerHTML = '<span data-i18n="btnAnalyzeSuccess"></span>';
     IntLayer.translateAll(analyzeBtn);
     await runAdvice(result, parsedJson);
@@ -625,7 +647,7 @@ async function runAnalysis(): Promise<void> {
 }
 
 async function hydrateViewers(telemetry: PipelineTelemetry): Promise<void> {
-  const viewerUSD = getEl("viewer-usd") as HTMLElement & { src?: string };
+  const viewerUSD = getEl("viewer-usd") as any;
   const viewerPlaceholder = getEl<HTMLDivElement>("viewer-placeholder");
 
   const meshPath = resolveMeshPath(telemetry);
@@ -637,18 +659,21 @@ async function hydrateViewers(telemetry: PipelineTelemetry): Promise<void> {
     
     // Fix trimesh black base color export and apply texture
     viewerUSD.addEventListener('load', async () => {
+      if (viewerUSD.src !== meshUrl) return; // Prevent race conditions
       const material = viewerUSD.model?.materials[0];
       if (material) {
         material.pbrMetallicRoughness.setBaseColorFactor([1, 1, 1, 1]);
         
         // Load original texture for the MESH tab
-        const originalPath = telemetry.ntc_compressed_files[0]?.original_path;
+        const originalPath = telemetry.ntc_compressed_files?.[0]?.original_path;
         if (originalPath) {
             try {
                 const hostPath = toHostPath(originalPath);
                 const texUrl = localFileUrl(hostPath);
                 const texture = await viewerUSD.createTexture(`${texUrl}&cb=${Date.now()}`);
-                material.pbrMetallicRoughness.baseColorTexture.setTexture(texture);
+                if (viewerUSD.src === meshUrl) {
+                    material.pbrMetallicRoughness.baseColorTexture.setTexture(texture);
+                }
             } catch (e) {
                 console.warn("[Nequ3D] Failed to apply texture to MESH tab", e);
             }
@@ -700,11 +725,14 @@ async function setQualityTextures(originalUrl: string, reconstructedUrl: string,
 
   const applyTexture = async (viewer: any, textureUrl: string) => {
     try {
+      if (viewer.src !== glbUrl) return; // Prevent race conditions
       const material = viewer.model?.materials[0];
       if (material) {
         material.pbrMetallicRoughness.setBaseColorFactor([1, 1, 1, 1]);
         const texture = await viewer.createTexture(`${textureUrl}&cb=${Date.now()}`);
-        material.pbrMetallicRoughness.baseColorTexture.setTexture(texture);
+        if (viewer.src === glbUrl) {
+            material.pbrMetallicRoughness.baseColorTexture.setTexture(texture);
+        }
       }
     } catch (e) {
       console.warn("[Nequ3D] Failed to apply texture to model-viewer", e);
@@ -726,53 +754,6 @@ async function setQualityTextures(originalUrl: string, reconstructedUrl: string,
   syncComparisonLayout();
 };
 
-function drawNtcSimulation(
-  ctx: CanvasRenderingContext2D,
-  image: HTMLImageElement,
-  bpp: string,
-): void {
-  const width = image.naturalWidth || image.width;
-  const height = image.naturalHeight || image.height;
-  if (width <= 0 || height <= 0) return;
-
-  const bppNum = Number.parseInt(bpp, 10);
-  const bitrate = Number.isFinite(bppNum) ? bppNum : 5;
-  const scale =
-    bitrate <= 2 ? 0.15 : bitrate <= 4 ? 0.25 : bitrate <= 6 ? 0.45 : 0.65;
-  const blurPx =
-    bitrate <= 2 ? 1.8 : bitrate <= 4 ? 1.25 : bitrate <= 6 ? 0.8 : 0.35;
-  const scaledWidth = Math.max(1, Math.round(width * scale));
-  const scaledHeight = Math.max(1, Math.round(height * scale));
-  const offscreen = document.createElement("canvas");
-
-  offscreen.width = scaledWidth;
-  offscreen.height = scaledHeight;
-
-  const offCtx = offscreen.getContext("2d");
-  if (!offCtx) return;
-
-  offCtx.imageSmoothingEnabled = true;
-  offCtx.imageSmoothingQuality = "low";
-  offCtx.clearRect(0, 0, scaledWidth, scaledHeight);
-  offCtx.drawImage(image, 0, 0, width, height, 0, 0, scaledWidth, scaledHeight);
-
-  ctx.save();
-  ctx.clearRect(0, 0, width, height);
-  ctx.imageSmoothingEnabled = false;
-  ctx.filter = `blur(${blurPx}px)`;
-  ctx.drawImage(
-    offscreen,
-    0,
-    0,
-    scaledWidth,
-    scaledHeight,
-    0,
-    0,
-    width,
-    height,
-  );
-  ctx.restore();
-}
 
 function syncComparisonLayout(): void {
   const layer = getEl<HTMLDivElement>("comparison-layer");
@@ -883,23 +864,109 @@ async function runAdvice(
   const aiOutput = getEl<HTMLDivElement>("ai-output");
   aiOutput.innerHTML = `<div class="status-pill"><div class="spinner"></div><span>${IntLayer.t.aiLoading}</span></div>`;
 
+  let imageBase64 = "";
+  const selectedModel = getSelectedModel();
+
+  let debugHtml = "";
+  if (selectedModel === "llava") {
+    // Wait slightly to ensure the model-viewer has fully rendered the new mesh
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    try {
+      const viewerId = activeMode === "quality" ? "viewer-ntc" : "viewer-usd";
+      const viewer = getEl<any>(viewerId);
+      
+      if (viewer && typeof viewer.toBlob === "function") {
+        const blob = await viewer.toBlob();
+        if (blob) {
+          imageBase64 = await new Promise<string>((resolve) => {
+            const reader = new FileReader();
+            reader.onloadend = () => resolve(reader.result as string);
+            reader.readAsDataURL(blob);
+          });
+        } else {
+           debugHtml = `<div style="color:red; font-size:10px;">[Debug] toBlob returned null</div>`;
+        }
+      } else if (viewer && viewer.shadowRoot) {
+        const canvas = viewer.shadowRoot.querySelector('canvas');
+        if (canvas) {
+          imageBase64 = canvas.toDataURL("image/jpeg", 0.85);
+        } else {
+           debugHtml = `<div style="color:red; font-size:10px;">[Debug] No canvas found in shadowRoot</div>`;
+        }
+      }
+    } catch (e) {
+      debugHtml = `<div style="color:red; font-size:10px;">[Debug] Exception: ${e}</div>`;
+    }
+    
+    if (imageBase64) {
+      debugHtml = `<img src="${imageBase64}" style="width:100px; border:2px solid lime; display:block; margin-bottom:10px;" />`;
+    } else if (!debugHtml) {
+      debugHtml = `<div style="color:red; font-size:10px;">[Debug] Image capture failed silently.</div>`;
+    }
+    
+    aiOutput.innerHTML = `<div class="status-pill"><div class="spinner"></div><span>${IntLayer.t.aiLoading}</span></div>` + debugHtml;
+  }
+
   const payload = JSON.stringify({
-    model: getSelectedModel(),
+    model: selectedModel,
     language: IntLayer.currentLang === "pl" ? "Polish" : "English",
     analysis_mode: qualityAvailable ? "mesh_ntc" : "geometry_only",
     ntc_bypassed: !qualityAvailable || Boolean(parsedTelemetry.ntc_bypassed),
     instruction_context: qualityAvailable
-      ? "Discuss mesh geometry and NTC texture compression only for UV-mapped mesh textures. Treat 3DGS as a separate uncompressed background."
-      : "Focus purely on mesh geometry and structure. Do not claim NTC VRAM savings because NTC was bypassed or no external textures were available.",
+      ? "CRITICAL RULE: NEVER invent, hallucinate, or guess VRAM savings percentages (e.g., 0% or 84.4%). You MUST ONLY report the exact VRAM reduction values explicitly present in the provided JSON telemetry. If the JSON lacks these values, do NOT make them up. Discuss mesh geometry and NTC texture compression accurately based ONLY on the data."
+      : "CRITICAL RULE: Focus purely on mesh geometry and structure. Do NOT mention or claim any NTC VRAM savings because NTC was bypassed. NEVER guess or hallucinate VRAM values.",
     telemetry: parsedTelemetry,
     raw_telemetry: rawTelemetry,
+    image_base64: imageBase64,
+  });
+
+  let streamedText = "";
+  let isStreaming = false;
+
+  const unbindToken = Events.On("llmToken", (event: any) => {
+    const token = event.data[0] || "";
+    if (!isStreaming) {
+      aiOutput.innerHTML = "";
+      isStreaming = true;
+    }
+    streamedText += token;
+    
+    // Clean conversational preamble dynamically
+    let displayText = streamedText;
+    const objectMatch = displayText.match(/- Object:/i) || displayText.match(/- \*\*Object:/i);
+    if (objectMatch && objectMatch.index && objectMatch.index > 0) {
+      displayText = displayText.substring(objectMatch.index);
+    } else if (!objectMatch && displayText.length > 50 && !displayText.includes("- ")) {
+      // If no bullet is found yet and text is long, just show it
+    }
+    
+    aiOutput.innerHTML = debugHtml + `<div class="ai-insight-card">${formatMarkdown(displayText)}</div>`;
+    aiOutput.scrollTop = aiOutput.scrollHeight;
+  });
+
+  const unbindDone = Events.On("llmDone", () => {
+    unbindToken();
+    unbindDone();
   });
 
   try {
     const aiResponse = await GenerateRenovationAdvice(payload);
-    typeWriter(formatMarkdown(aiResponse), aiOutput);
+    if (!isStreaming) {
+      aiOutput.innerHTML = debugHtml;
+      typeWriter(`<div class="ai-insight-card">${formatMarkdown(aiResponse)}</div>`, aiOutput);
+    } else {
+      let finalResponse = aiResponse;
+      const objectMatch = finalResponse.match(/- Object:/i) || finalResponse.match(/- \*\*Object:/i);
+      if (objectMatch && objectMatch.index && objectMatch.index > 0) {
+        finalResponse = finalResponse.substring(objectMatch.index);
+      }
+      aiOutput.innerHTML = debugHtml + `<div class="ai-insight-card">${formatMarkdown(finalResponse)}</div>`;
+    }
   } catch (error) {
     aiOutput.textContent = String(error);
+  } finally {
+    unbindToken();
+    unbindDone();
   }
 }
 
@@ -910,8 +977,8 @@ function formatMarkdown(markdown: string): string {
       '<strong style="color: var(--accent-teal);">$1</strong>',
     )
     .replace(
-      /(?:^|\n)\* (.*?)(?=\n|$)/g,
-      '<div style="margin-left: 12px; margin-bottom: 6px;">- $1</div>',
+      /(?:^|\n)(?:-|\*) (.*?)(?=\n|$)/g,
+      '<div style="margin-left: 12px; margin-bottom: 6px; display: flex; gap: 8px; align-items: start;"><span style="color: var(--accent-teal);">•</span> <span>$1</span></div>',
     )
     .replace(/\n/g, "<br>");
 }
@@ -1082,7 +1149,7 @@ function isSupportedAsset(path: string): boolean {
 
 function getSelectedModel(): ModelChoice {
   const value = getEl<HTMLSelectElement>("llm-model").value as ModelChoice;
-  if (value === "llama3" || value === "mistral") return value;
+  if (value === "llama3" || value === "mistral" || value === "llava") return value;
   return "gemma:2b";
 }
 
@@ -1096,6 +1163,7 @@ function setLanguage(lang: Language): void {
   if (currentTelemetryData) {
     const outputPre = getEl<HTMLElement>("output");
     outputPre.innerHTML = renderTelemetryHTML(currentTelemetryData);
+    initTelemetryCharts(currentTelemetryData);
   }
 
   // Re-run LLM advice immediately in new language
@@ -1207,15 +1275,7 @@ function requestViewerResize(): void {
   syncComparisonLayout();
 }
 
-function loadImage(src: string): Promise<HTMLImageElement> {
-  return new Promise((resolve, reject) => {
-    const image = new Image();
-    image.crossOrigin = "anonymous";
-    image.onload = () => resolve(image);
-    image.onerror = () => reject(new Error(`Image load failed: ${src}`));
-    image.src = src;
-  });
-}
+
 
 function safeJsonParse<T>(value: string): T | null {
   try {
@@ -1239,57 +1299,183 @@ initUI();
 
 function renderTelemetryHTML(data: any): string {
   if (!data || typeof data !== "object") return String(data);
-  let html = '<table style="width: 100%; border-collapse: collapse; font-size: 0.85rem; text-align: left;">';
+  const lang = IntLayer.currentLang || "en";
+
+  const t = (en: string, pl: string) => lang === "pl" ? pl : en;
+
+  let html = `<div class="telemetry-grid">`;
   
-  const translations: Record<string, Record<string, string>> = {
-    schema_version: { en: "Schema Version", pl: "Wersja Schematu" },
-    status: { en: "Status", pl: "Status" },
-    total_prim_count: { en: "Total Prim Count", pl: "Liczba Obiektów (Prims)" },
-    mesh_count: { en: "Mesh Count", pl: "Liczba Siatek" },
-    material_count: { en: "Material Count", pl: "Liczba Materiałów" },
-    total_vertices: { en: "Total Vertices", pl: "Suma Wierzchołków" },
-    total_faces: { en: "Total Faces", pl: "Suma Wielokątów" },
-    prim_names: { en: "Prim Names", pl: "Nazwy Obiektów" },
-    texture_count: { en: "Texture Count", pl: "Liczba Tekstur" },
-    ntc_compressed_files: { en: "Compressed Textures (NTC)", pl: "Skompresowane Tekstury (NTC)" },
-    original: { en: "Original File", pl: "Plik Oryginalny" },
-    compression_time_sec: { en: "Compression Time (s)", pl: "Czas Kompresji (s)" },
-    raw_vram_mb: { en: "Raw VRAM (MB)", pl: "Surowe VRAM (MB)" },
-    ntc_vram_mb: { en: "NTC VRAM (MB)", pl: "NTC VRAM (MB)" },
-    vram_saved_mb: { en: "VRAM Saved (MB)", pl: "Zaoszczędzone VRAM (MB)" },
-    vram_reduction: { en: "VRAM Reduction", pl: "Redukcja VRAM" },
-    metrics: { en: "Metrics", pl: "Metryki" },
-    ntc_bypassed: { en: "NTC Bypassed", pl: "Pominięto NTC" },
-    ntc_bypass_reason: { en: "Bypass Reason", pl: "Powód Pominięcia" },
-    has_ntc_quality: { en: "Has NTC Quality", pl: "Posiada Jakość NTC" },
-    texture_processing_status: { en: "Processing Status", pl: "Status Przetwarzania" },
-    proxy_glb_path: { en: "Proxy GLB Path", pl: "Ścieżka Proxy GLB" },
-  };
-
-  for (const [key, value] of Object.entries(data)) {
-    if (key === "raw_telemetry") continue;
-    let displayValue = value;
-    if (typeof value === "object" && value !== null) {
-      if (Array.isArray(value)) {
-        displayValue = value.map(v => typeof v === "object" ? renderTelemetryHTML(v) : v).join("<br/>");
-      } else {
-        displayValue = renderTelemetryHTML(value);
-      }
-    }
-    
-    // Fallback to formatted key if translation is missing
-    const lang = IntLayer.currentLang || "en";
-    let formattedKey = translations[key]?.[lang];
-    if (!formattedKey) {
-      formattedKey = key.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
-    }
-
-    html += `<tr style="border-bottom: 1px solid var(--border-color);">
-      <td style="padding: 6px 4px; color: var(--text-secondary); white-space: nowrap; vertical-align: top;">${formattedKey}</td>
-      <td style="padding: 6px 4px; font-family: monospace; color: var(--accent-teal); word-break: break-all;">${displayValue}</td>
-    </tr>`;
+  if (data.total_vertices !== undefined) {
+    html += `
+      <div class="metric-card">
+        <span class="metric-title">${t("Vertices", "Wierzchołki")}</span>
+        <span class="metric-value highlight">${data.total_vertices.toLocaleString()}</span>
+      </div>
+    `;
   }
-  html += '</table>';
+  if (data.total_faces !== undefined) {
+    html += `
+      <div class="metric-card">
+        <span class="metric-title">${t("Faces", "Wielokąty")}</span>
+        <span class="metric-value">${data.total_faces?.toLocaleString()}</span>
+      </div>
+    `;
+  }
+  
+  if (data.mesh_count !== undefined) {
+    html += `
+      <div class="metric-card">
+        <span class="metric-title">${t("Meshes", "Siatki")}</span>
+        <span class="metric-value">${data.mesh_count}</span>
+      </div>
+    `;
+  }
+  
+  if (data.texture_count !== undefined) {
+    html += `
+      <div class="metric-card">
+        <span class="metric-title">${t("Textures", "Tekstury")}</span>
+        <span class="metric-value">${data.texture_count}</span>
+      </div>
+    `;
+  }
+  
+  if (data.material_count !== undefined) {
+    html += `
+      <div class="metric-card">
+        <span class="metric-title">${t("Materials", "Materiały")}</span>
+        <span class="metric-value">${data.material_count}</span>
+      </div>
+    `;
+  }
+  
+  if (data.total_prim_count !== undefined) {
+    html += `
+      <div class="metric-card">
+        <span class="metric-title">${t("Prims", "Obiekty (Prims)")}</span>
+        <span class="metric-value">${data.total_prim_count}</span>
+      </div>
+    `;
+  }
+  
+  if (data.status !== undefined) {
+    html += `
+      <div class="metric-card" style="grid-column: span 2;">
+        <span class="metric-title">${t("Status", "Status")}</span>
+        <span class="metric-value" style="color: ${data.status === 'success' ? 'var(--accent-teal)' : '#e53e3e'}">${data.status.toUpperCase()}</span>
+      </div>
+    `;
+  }
+  
+  html += `</div>`;
+
+  if (data.ntc_compressed_files && Array.isArray(data.ntc_compressed_files) && data.ntc_compressed_files.length > 0) {
+    let savedTotal = 0;
+    let totalTime = 0;
+    let avgReduction = 0;
+    let validFiles = 0;
+
+    data.ntc_compressed_files.forEach((file: any) => {
+      savedTotal += Number(file.vram_saved_mb) || 0;
+      totalTime += Number(file.compression_time_sec) || 0;
+      let redStr = String(file.vram_reduction || "").replace("%", "");
+      let redNum = parseFloat(redStr);
+      if (!isNaN(redNum)) {
+        avgReduction += redNum;
+        validFiles++;
+      }
+    });
+    
+    if (validFiles > 0) avgReduction /= validFiles;
+
+    html += `
+      <div class="chart-container">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+           <span style="font-family: var(--font-mono); font-size: 0.75rem; color: var(--text-muted); text-transform: uppercase; font-weight: 700;">${t("VRAM Optimization", "Optymalizacja VRAM")}</span>
+           <span style="font-family: var(--font-mono); font-size: 1rem; color: var(--accent-teal); font-weight: 800;">-${avgReduction.toFixed(1)}%</span>
+        </div>
+        <div class="chart-canvas-wrapper" style="height: 180px;">
+          <canvas id="vramChart"></canvas>
+        </div>
+        <div style="margin-top: 24px; display: flex; justify-content: space-around; font-family: var(--font-mono);">
+          <div style="text-align: center;">
+            <span style="color: var(--text-muted); font-size: 0.7rem; display: block; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px;">${t("Saved", "Zaoszczędzono")}</span>
+            <span style="font-weight: 800; font-size: 1.25rem; color: var(--accent-teal);">${savedTotal.toFixed(2)} MB</span>
+          </div>
+          <div style="text-align: center;">
+            <span style="color: var(--text-muted); font-size: 0.7rem; display: block; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px;">${t("Time", "Czas")}</span>
+            <span style="font-weight: 800; font-size: 1.25rem; color: var(--text-main);">${totalTime.toFixed(2)}s</span>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
   return html;
+}
+
+function initTelemetryCharts(data: any): void {
+  if (!data || !data.ntc_compressed_files || !Array.isArray(data.ntc_compressed_files) || data.ntc_compressed_files.length === 0) {
+    return;
+  }
+  
+  const canvas = document.getElementById("vramChart") as HTMLCanvasElement;
+  if (!canvas) return;
+  
+  let rawVram = 0;
+  let ntcVram = 0;
+  
+  data.ntc_compressed_files.forEach((file: any) => {
+    rawVram += Number(file.raw_vram_mb) || 0;
+    ntcVram += Number(file.ntc_vram_mb) || 0;
+  });
+  
+  const lang = IntLayer.currentLang || "en";
+  const t = (en: string, pl: string) => lang === "pl" ? pl : en;
+
+  const existingChart = Chart.getChart(canvas);
+  if (existingChart) {
+    existingChart.destroy();
+  }
+
+  new Chart(canvas, {
+    type: 'doughnut',
+    data: {
+      labels: [t('Original (Removed)', 'Oryginał (Usunięty)'), t('NTC Compressed', 'Skompresowane NTC')],
+      datasets: [{
+        data: [Math.max(0, rawVram - ntcVram), ntcVram],
+        backgroundColor: [
+          '#2D3748',
+          '#0D9488'
+        ],
+        borderWidth: 0,
+        hoverOffset: 4
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: {
+          position: 'bottom',
+          labels: {
+            color: '#A0AEC0',
+            font: {
+              family: "'JetBrains Mono', monospace",
+              size: 10
+            }
+          }
+        },
+        tooltip: {
+          callbacks: {
+            label: function(context) {
+              return ' ' + context.label + ': ' + Number(context.raw).toFixed(2) + ' MB';
+            }
+          }
+        }
+      },
+      cutout: '70%'
+    }
+  });
 }
 

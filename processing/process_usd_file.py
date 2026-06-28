@@ -4,8 +4,8 @@ import os
 import subprocess
 import sys
 import time
-import zipfile  # Built-in library for ZIP/USDZ handling
 import uuid
+import zipfile  # Built-in library for ZIP/USDZ handling
 
 import numpy as np
 import trimesh
@@ -66,13 +66,14 @@ def get_texture_for_prim(prim):
                     return tex
     return None
 
+
 def build_material(img_path):
     mat_name = f"mat_{uuid.uuid4().hex}"
     kwargs = {
         "name": mat_name,
         "metallicFactor": 0.0,
         "roughnessFactor": 0.8,
-        "baseColorFactor": [255, 255, 255, 255]
+        "baseColorFactor": [255, 255, 255, 255],
     }
     if img_path and os.path.exists(img_path):
         try:
@@ -81,13 +82,16 @@ def build_material(img_path):
             pass
     return trimesh.visual.material.PBRMaterial(**kwargs)
 
+
 def generate_proxy_mesh(usd_path, suffix="_proxy.glb", use_reconstructed=False):
     """
     Generates a lightweight .glb (.gltf) structural proxy directly via Pixar API.
     Properly handles GeomSubsets and embeds textures.
     """
     proxy_path = usd_path.rsplit(".", 1)[0] + suffix
-    print(f"[Core Python] Generating structural proxy GLB: {proxy_path} (Reconstructed: {use_reconstructed})")
+    print(
+        f"[Core Python] Generating structural proxy GLB: {proxy_path} (Reconstructed: {use_reconstructed})"
+    )
 
     try:
         stage = Usd.Stage.Open(usd_path)
@@ -156,14 +160,20 @@ def generate_proxy_mesh(usd_path, suffix="_proxy.glb", use_reconstructed=False):
                     for face_i, count in enumerate(counts):
                         face_tris = []
                         for i in range(1, count - 1):
-                            triangulated_faces.append([indices[idx], indices[idx + i], indices[idx + i + 1]])
+                            triangulated_faces.append(
+                                [indices[idx], indices[idx + i], indices[idx + i + 1]]
+                            )
                             face_tris.append(tri_idx)
                             tri_idx += 1
                         original_face_to_triangles[face_i] = face_tris
                         idx += count
 
                     points_out = points
-                    uvs_out = uv_data if uv_data is not None and len(uv_data) == len(points) else None
+                    uvs_out = (
+                        uv_data
+                        if uv_data is not None and len(uv_data) == len(points)
+                        else None
+                    )
 
                 triangulated_faces = np.array(triangulated_faces)
                 subsets = [p for p in prim.GetChildren() if p.IsA(UsdGeom.Subset)]
@@ -181,7 +191,9 @@ def generate_proxy_mesh(usd_path, suffix="_proxy.glb", use_reconstructed=False):
                             continue
 
                         faces_subset = triangulated_faces[sub_tris]
-                        tri_mesh = trimesh.Trimesh(vertices=points_out, faces=faces_subset, process=False)
+                        tri_mesh = trimesh.Trimesh(
+                            vertices=points_out, faces=faces_subset, process=False
+                        )
                         if uvs_out is not None:
                             tri_mesh.visual = trimesh.visual.TextureVisuals(uv=uvs_out)
 
@@ -189,11 +201,13 @@ def generate_proxy_mesh(usd_path, suffix="_proxy.glb", use_reconstructed=False):
                         img_path = os.path.join(base_dir, tex) if tex else None
                         if img_path and use_reconstructed:
                             img_path = img_path + "_reconstructed.png"
-                        
+
                         tri_mesh.visual.material = build_material(img_path)
                         meshes.append(tri_mesh)
                 else:
-                    tri_mesh = trimesh.Trimesh(vertices=points_out, faces=triangulated_faces, process=False)
+                    tri_mesh = trimesh.Trimesh(
+                        vertices=points_out, faces=triangulated_faces, process=False
+                    )
                     if uvs_out is not None:
                         tri_mesh.visual = trimesh.visual.TextureVisuals(uv=uvs_out)
 
@@ -293,21 +307,25 @@ def run_ntc_compression(usd_path, texture_paths, target_bpp, target_steps="150")
             reduction = 100 - ((ntc_size_mb / raw_vram_mb) * 100)
 
             reconstructed_img_path = actual_tex_path + "_reconstructed.png"
-            
+
             # Extract to a subfolder to grab the actual decompressed image
             import shutil
+
             extract_dir = actual_tex_path + "_extracted"
             os.makedirs(extract_dir, exist_ok=True)
-            
+
             decompress_cmd = [
                 "ntc-cli",
                 output_ntc_file,
                 "-i",
                 extract_dir,
-                "--imageFormat", "PNG"
+                "--imageFormat",
+                "PNG",
             ]
-            result = subprocess.run(decompress_cmd, check=True, capture_output=True, text=True)
-            
+            result = subprocess.run(
+                decompress_cmd, check=True, capture_output=True, text=True
+            )
+
             # Move the extracted PNG to the expected path
             for f in os.listdir(extract_dir):
                 if f.lower().endswith(".png"):
@@ -479,13 +497,17 @@ def analyze_usd_stage(file_path, target_bpp="5", target_steps="150"):
     summarize_ntc_state(telemetry, found_textures)
 
     print("[Core Python] Action: Generating Proxy Mesh (GLB) for Web Viewer...")
-    proxy_path = generate_proxy_mesh(file_path, suffix="_proxy.glb", use_reconstructed=False)
+    proxy_path = generate_proxy_mesh(
+        file_path, suffix="_proxy.glb", use_reconstructed=False
+    )
     if proxy_path:
         telemetry["proxy_glb_path"] = proxy_path
 
     if telemetry["has_ntc_quality"]:
         print("[Core Python] Action: Generating Proxy NTC Mesh (GLB)...")
-        proxy_ntc_path = generate_proxy_mesh(file_path, suffix="_proxy_ntc.glb", use_reconstructed=True)
+        proxy_ntc_path = generate_proxy_mesh(
+            file_path, suffix="_proxy_ntc.glb", use_reconstructed=True
+        )
         if proxy_ntc_path:
             telemetry["proxy_ntc_glb_path"] = proxy_ntc_path
 

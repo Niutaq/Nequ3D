@@ -21,9 +21,10 @@ type App struct{}
 
 // OllamaRequest represents the request payload for the Ollama API
 type OllamaRequest struct {
-	Model  string `json:"model"`
-	Prompt string `json:"prompt"`
-	Stream bool   `json:"stream"`
+	Model  string   `json:"model"`
+	Prompt string   `json:"prompt"`
+	Stream bool     `json:"stream"`
+	Images []string `json:"images,omitempty"`
 }
 
 // OllamaResponse represents the response payload from the Ollama API
@@ -39,6 +40,7 @@ type AdvicePayload struct {
 	InstructionContext string          `json:"instruction_context"`
 	Telemetry          json.RawMessage `json:"telemetry"`
 	RawTelemetry       string          `json:"raw_telemetry"`
+	ImageBase64        string          `json:"image_base64,omitempty"`
 }
 
 type SystemStats struct {
@@ -56,7 +58,7 @@ func NewApp() *App {
 
 // GenerateRenovationAdvice sends a request to the local Ollama API to generate renovation advice based on telemetry data
 func (a *App) GenerateRenovationAdvice(telemetryJSON string) (string, error) {
-	model, telemetryForPrompt, _ := normalizeAdvicePayload(telemetryJSON)
+	model, telemetryForPrompt, _, imageBase64 := normalizeAdvicePayload(telemetryJSON)
 	// Task 2: Pre-compute NTC logic in Go for the LLM
 	var telemetryMap map[string]any
 	if err := json.Unmarshal([]byte(telemetryForPrompt), &telemetryMap); err != nil {
@@ -81,21 +83,44 @@ func (a *App) GenerateRenovationAdvice(telemetryJSON string) (string, error) {
 	}
 
 	// Task 3: Strict Anti-Conversational Prompt
-	prompt := fmt.Sprintf(`You are a robotic data formatter. Output EXACTLY 3 bullet points.
+	var prompt string
+	if imageBase64 != "" {
+		prompt = fmt.Sprintf(`You are an expert 3D model analyst. I am providing you with a 2D rendering of a 3D scanned environment/object. Output EXACTLY 3 bullet points.
 CRITICAL: You must write your entire response STRICTLY in %s.
-CRITICAL: DO NOT start with "Sure, here are..." or any conversational text. ONLY output the bullets.
+CRITICAL: DO NOT start with "Sure, here are..." or any conversational text. You MUST start your response exactly with the first bullet point.
+CRITICAL: Do NOT mention that this is an image, photograph, or render. Focus entirely on describing the physical 3D scene, space, objects, and textures.
 
-- Bullet 1: "Object: [deduce name from file_path or prim_names]"
-- Bullet 2: "Geometry: [total_vertices] vertices, [total_faces] faces"
-- Bullet 3: "%s"
+- Object: [deduce name from file_path or prim_names]
+- Visual: [briefly describe the 3D space, objects, and textures visible]
+- %s
 
 JSON DATA:
 %s`, language, compressionStr, telemetryForPrompt)
+	} else {
+		prompt = fmt.Sprintf(`You are a robotic data formatter. Output EXACTLY 3 bullet points.
+CRITICAL: You must write your entire response STRICTLY in %s.
+CRITICAL: DO NOT start with "Sure, here are..." or any conversational text. You MUST start your response exactly with the first bullet point.
+
+- Object: [deduce name from file_path or prim_names]
+- Geometry: [total_vertices] vertices, [total_faces] faces
+- %s
+
+JSON DATA:
+%s`, language, compressionStr, telemetryForPrompt)
+	}
 
 	reqBody := OllamaRequest{
 		Model:  model,
 		Prompt: prompt,
-		Stream: false,
+		Stream: true, // Switched to streaming
+	}
+
+	if imageBase64 != "" {
+		base64Data := imageBase64
+		if idx := strings.Index(base64Data, ","); idx != -1 {
+			base64Data = base64Data[idx+1:]
+		}
+		reqBody.Images = []string{base64Data}
 	}
 
 	jsonBody, err := json.Marshal(reqBody)
@@ -110,27 +135,36 @@ JSON DATA:
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("failed to read response: %v", err)
-	}
-
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(resp.Body)
 		return "", fmt.Errorf("local AI returned HTTP %d: %s", resp.StatusCode, trimForError(body))
 	}
 
-	var ollamaResp OllamaResponse
-	if err := json.Unmarshal(body, &ollamaResp); err != nil {
-		return "", fmt.Errorf("failed to parse AI response: %v", err)
+	scanner := bufio.NewScanner(resp.Body)
+	var fullResponse strings.Builder
+
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		var ollamaResp OllamaResponse
+		if err := json.Unmarshal(line, &ollamaResp); err == nil {
+			fullResponse.WriteString(ollamaResp.Response)
+			application.Get().Event.Emit("llmToken", ollamaResp.Response)
+		}
 	}
 
-	return ollamaResp.Response, nil
+	if err := scanner.Err(); err != nil {
+		return "", fmt.Errorf("failed reading stream: %v", err)
+	}
+
+	application.Get().Event.Emit("llmDone", fullResponse.String())
+	return fullResponse.String(), nil
 }
 
-func normalizeAdvicePayload(payload string) (string, string, string) {
+func normalizeAdvicePayload(payload string) (string, string, string, string) {
 	model := "gemma:2b"
 	context := "Default mesh analysis."
 	telemetry := payload
+	var imageBase64 string
 
 	var structured AdvicePayload
 	if err := json.Unmarshal([]byte(payload), &structured); err == nil {
@@ -143,10 +177,11 @@ func normalizeAdvicePayload(payload string) (string, string, string) {
 		if language := strings.TrimSpace(structured.Language); language != "" {
 			telemetry = injectAdviceLanguage(telemetry, language)
 		}
-		return model, telemetry, context
+		imageBase64 = structured.ImageBase64
+		return model, telemetry, context, imageBase64
 	}
 
-	return model, telemetry, context
+	return model, telemetry, context, imageBase64
 }
 
 func injectAdviceLanguage(telemetry string, language string) string {
@@ -170,6 +205,8 @@ func sanitizeOllamaModel(model string) string {
 		return "llama3"
 	case "mistral", "mistral:7b":
 		return "mistral"
+	case "llava":
+		return "llava"
 	default:
 		return "gemma:2b"
 	}
