@@ -1,0 +1,29 @@
+syntax = "proto3";
+
+package pipeline;
+
+option go_package = "./pipeline_rpc";
+
+service NtcPipelineService {
+  rpc ProcessModel (ProcessModelRequest) returns (stream ProcessModelResponse);
+}
+
+message ProcessModelRequest {
+  string absolute_path = 1;
+  int32 target_bitrate = 2;
+  int32 training_steps = 3;
+}
+
+message ProcessModelResponse {
+  // "info", "progress", "result", "error"
+  string update_type = 1;
+  string message = 2;
+  
+  // Used when update_type == "progress"
+  int32 current_step = 3;
+  int32 total_steps = 4;
+  float current_loss = 5;
+
+  // Used when update_type == "result"
+  string telemetry_json = 6;
+}

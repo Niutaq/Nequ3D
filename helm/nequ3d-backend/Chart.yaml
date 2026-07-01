@@ -1,0 +1,6 @@
+apiVersion: v2
+name: nequ3d-backend
+description: A Helm chart for Nequ3D processing backend server (Go)
+type: application
+version: 0.1.0
+appVersion: "1.0.0"

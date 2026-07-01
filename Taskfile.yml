@@ -1,0 +1,39 @@
+version: '3'
+
+tasks:
+  proto:
+    desc: Generates ProtoBuf files for Go and Python (Cross-platform)
+    cmds:
+      - cmd: pwsh -File ./scripts/gen_proto.ps1
+        platforms: [windows]
+      - cmd: bash ./scripts/gen_proto.sh
+        platforms: [linux, darwin]
+
+  build-core:
+    desc: Builds the Docker image for the processing core
+    dir: processing
+    cmds:
+      - docker build -t nequ3d-core:latest .
+
+  run-core:
+    desc: Starts the Python gRPC server locally (Requires a separate terminal!)
+    dir: processing
+    cmds:
+      - cmd: ./venv/Scripts/python rpc_server.py
+        platforms: [windows]
+      - cmd: ./venv/bin/python rpc_server.py
+        platforms: [linux, darwin]
+
+  dev-app:
+    desc: Generates Wails bindings and starts the Wails dev server
+    dir: nequ3d-app
+    cmds:
+      - wails3 generate bindings
+      - wails3 dev
+
+  dev:
+    desc: Prepares everything and starts the dev server (builds core, generates proto, runs app)
+    cmds:
+      - task: proto
+      - task: build-core
+      - task: dev-app

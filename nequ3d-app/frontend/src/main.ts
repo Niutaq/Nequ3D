@@ -289,6 +289,11 @@ let currentTelemetryData: any = null;
 const comparisonState = {
   split: 50,
 };
+
+let rotX = 0;
+let rotY = 0;
+let rotZ = 0;
+
 function initUI(): void {
   document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
     <div class="workspace">
@@ -380,6 +385,11 @@ function initUI(): void {
         <div class="viewer-tabs">
           <button id="tab-mesh" class="view-tab active" data-i18n="tabMesh"></button>
           <button id="tab-quality" class="view-tab" data-i18n="tabQuality" hidden></button>
+          <div class="segmented" style="margin-left: 16px; border-left: none; border-top: none; border-bottom: none;">
+             <button id="btn-rot-x" class="view-tab" title="Obróć w osi X (Pion)">⟳ X</button>
+             <button id="btn-rot-y" class="view-tab" title="Obróć w osi Y (Poziom)">⟳ Y</button>
+             <button id="btn-rot-z" class="view-tab" title="Obróć w osi Z (Przechył)">⟳ Z</button>
+          </div>
           <div id="fps-counter" style="margin-left: auto; padding: 14px 28px; font-family: var(--font-mono); font-size: 0.7rem; color: var(--accent-teal); font-weight: bold;">0 FPS</div>
         </div>
 
@@ -428,23 +438,42 @@ function initUI(): void {
 }
 
 function startFpsCounter() {
-    const fpsEl = getEl("fps-counter");
-    function loop() {
-        fpsFrames++;
-        const now = performance.now();
-        if (now - lastFpsTime >= 1000) {
-            if (fpsEl) fpsEl.textContent = `${Math.round((fpsFrames * 1000) / (now - lastFpsTime))} FPS`;
-            fpsFrames = 0;
-            lastFpsTime = now;
-        }
-        requestAnimationFrame(loop);
+  const fpsEl = getEl("fps-counter");
+  function loop() {
+    fpsFrames++;
+    const now = performance.now();
+    if (now - lastFpsTime >= 1000) {
+      if (fpsEl)
+        fpsEl.textContent = `${Math.round((fpsFrames * 1000) / (now - lastFpsTime))} FPS`;
+      fpsFrames = 0;
+      lastFpsTime = now;
     }
     requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+}
+
+function updateViewerOrientations(): void {
+  const orientation = `${rotX}deg ${rotY}deg ${rotZ}deg`;
+  const viewers = ["viewer-usd", "viewer-orig", "viewer-ntc"];
+  viewers.forEach((id) => {
+    const v = getEl<any>(id);
+    if (v) v.orientation = orientation;
+  });
 }
 
 function attachEventListeners(): void {
   const selectBtn = getEl<HTMLButtonElement>("select-btn");
   const analyzeBtn = getEl<HTMLButtonElement>("analyze-btn");
+
+  Events.On("pipelineLog", (ev: any) => {
+    const outputPre = getEl<HTMLElement>("output");
+    // Wails v3 event data is usually ev.data[0]
+    const message = ev.data && ev.data.length > 0 ? ev.data[0] : String(ev);
+    outputPre.innerHTML = `<div style="padding:20px; font-family:var(--font-mono); color:var(--accent-teal); font-size:1.1rem; display:flex; align-items:center; gap:12px;">
+      <div class="spinner"></div> <span>${message}</span>
+    </div>`;
+  });
   const divider = getEl<HTMLDivElement>("comp-divider");
   const compLayer = getEl<HTMLDivElement>("comparison-layer");
 
@@ -477,6 +506,19 @@ function attachEventListeners(): void {
     switchTab("quality"),
   );
 
+  getEl<HTMLButtonElement>("btn-rot-x").addEventListener("click", () => {
+    rotX = (rotX + 90) % 360;
+    updateViewerOrientations();
+  });
+  getEl<HTMLButtonElement>("btn-rot-y").addEventListener("click", () => {
+    rotY = (rotY + 90) % 360;
+    updateViewerOrientations();
+  });
+  getEl<HTMLButtonElement>("btn-rot-z").addEventListener("click", () => {
+    rotZ = (rotZ + 90) % 360;
+    updateViewerOrientations();
+  });
+
   getEl<HTMLInputElement>("bpp-slider").addEventListener("input", (event) => {
     currentBpp = (event.target as HTMLInputElement).value;
     updateBppLabel();
@@ -506,8 +548,6 @@ function attachEventListeners(): void {
     "click",
     toggleTheme,
   );
-
-
 
   const viewerOrig = getEl<any>("viewer-orig");
   const viewerNtc = getEl<any>("viewer-ntc");
@@ -623,7 +663,11 @@ async function runAnalysis(): Promise<void> {
   }, 100);
 
   try {
-    const result = await ProcessModel(currentAbsolutePath, currentBpp, currentSteps);
+    const result = await ProcessModel(
+      currentAbsolutePath,
+      currentBpp,
+      currentSteps,
+    );
     const parsedJson = parseTelemetry(result);
     currentRawTelemetry = result;
     currentTelemetryData = parsedJson;
@@ -656,30 +700,39 @@ async function hydrateViewers(telemetry: PipelineTelemetry): Promise<void> {
     viewerUSD.src = meshUrl;
     viewerUSD.style.display = "block";
     viewerPlaceholder.style.display = "none";
-    
+
     // Fix trimesh black base color export and apply texture
-    viewerUSD.addEventListener('load', async () => {
-      if (viewerUSD.src !== meshUrl) return; // Prevent race conditions
-      const material = viewerUSD.model?.materials[0];
-      if (material) {
-        material.pbrMetallicRoughness.setBaseColorFactor([1, 1, 1, 1]);
-        
-        // Load original texture for the MESH tab
-        const originalPath = telemetry.ntc_compressed_files?.[0]?.original_path;
-        if (originalPath) {
+    viewerUSD.addEventListener(
+      "load",
+      async () => {
+        if (viewerUSD.src !== meshUrl) return; // Prevent race conditions
+        const material = viewerUSD.model?.materials[0];
+        if (material) {
+          material.pbrMetallicRoughness.setBaseColorFactor([1, 1, 1, 1]);
+
+          // Load original texture for the MESH tab
+          const originalPath =
+            telemetry.ntc_compressed_files?.[0]?.original_path;
+          if (originalPath) {
             try {
-                const hostPath = toHostPath(originalPath);
-                const texUrl = localFileUrl(hostPath);
-                const texture = await viewerUSD.createTexture(`${texUrl}&cb=${Date.now()}`);
-                if (viewerUSD.src === meshUrl) {
-                    material.pbrMetallicRoughness.baseColorTexture.setTexture(texture);
-                }
+              const hostPath = toHostPath(originalPath);
+              const texUrl = localFileUrl(hostPath);
+              const texture = await viewerUSD.createTexture(
+                `${texUrl}&cb=${Date.now()}`,
+              );
+              if (viewerUSD.src === meshUrl) {
+                material.pbrMetallicRoughness.baseColorTexture.setTexture(
+                  texture,
+                );
+              }
             } catch (e) {
-                console.warn("[Nequ3D] Failed to apply texture to MESH tab", e);
+              console.warn("[Nequ3D] Failed to apply texture to MESH tab", e);
             }
+          }
         }
-      }
-    }, { once: true });
+      },
+      { once: true },
+    );
   } else {
     viewerUSD.src = "";
     viewerUSD.style.display = "none";
@@ -709,10 +762,18 @@ async function hydrateQualityViewer(
     return;
   }
 
-  await setQualityTextures(localFileUrl(originalPath), localFileUrl(reconstructedPath), localFileUrl(glbPath));
+  await setQualityTextures(
+    localFileUrl(originalPath),
+    localFileUrl(reconstructedPath),
+    localFileUrl(glbPath),
+  );
 }
 
-async function setQualityTextures(originalUrl: string, reconstructedUrl: string, glbUrl: string): Promise<void> {
+async function setQualityTextures(
+  originalUrl: string,
+  reconstructedUrl: string,
+  glbUrl: string,
+): Promise<void> {
   const viewerOrig = getEl<any>("viewer-orig");
   const viewerNtc = getEl<any>("viewer-ntc");
 
@@ -729,9 +790,11 @@ async function setQualityTextures(originalUrl: string, reconstructedUrl: string,
       const material = viewer.model?.materials[0];
       if (material) {
         material.pbrMetallicRoughness.setBaseColorFactor([1, 1, 1, 1]);
-        const texture = await viewer.createTexture(`${textureUrl}&cb=${Date.now()}`);
+        const texture = await viewer.createTexture(
+          `${textureUrl}&cb=${Date.now()}`,
+        );
         if (viewer.src === glbUrl) {
-            material.pbrMetallicRoughness.baseColorTexture.setTexture(texture);
+          material.pbrMetallicRoughness.baseColorTexture.setTexture(texture);
         }
       }
     } catch (e) {
@@ -739,10 +802,18 @@ async function setQualityTextures(originalUrl: string, reconstructedUrl: string,
     }
   };
 
-  viewerOrig.addEventListener('load', () => applyTexture(viewerOrig, originalUrl), { once: true });
-  viewerNtc.addEventListener('load', () => applyTexture(viewerNtc, reconstructedUrl), { once: true });
-  
-  viewerOrig.addEventListener('camera-change', () => {
+  viewerOrig.addEventListener(
+    "load",
+    () => applyTexture(viewerOrig, originalUrl),
+    { once: true },
+  );
+  viewerNtc.addEventListener(
+    "load",
+    () => applyTexture(viewerNtc, reconstructedUrl),
+    { once: true },
+  );
+
+  viewerOrig.addEventListener("camera-change", () => {
     const orbit = viewerOrig.getCameraOrbit();
     const target = viewerOrig.getCameraTarget();
     const fov = viewerOrig.getFieldOfView();
@@ -752,8 +823,7 @@ async function setQualityTextures(originalUrl: string, reconstructedUrl: string,
   });
 
   syncComparisonLayout();
-};
-
+}
 
 function syncComparisonLayout(): void {
   const layer = getEl<HTMLDivElement>("comparison-layer");
@@ -874,7 +944,7 @@ async function runAdvice(
     try {
       const viewerId = activeMode === "quality" ? "viewer-ntc" : "viewer-usd";
       const viewer = getEl<any>(viewerId);
-      
+
       if (viewer && typeof viewer.toBlob === "function") {
         const blob = await viewer.toBlob();
         if (blob) {
@@ -884,27 +954,29 @@ async function runAdvice(
             reader.readAsDataURL(blob);
           });
         } else {
-           debugHtml = `<div style="color:red; font-size:10px;">[Debug] toBlob returned null</div>`;
+          debugHtml = `<div style="color:red; font-size:10px;">[Debug] toBlob returned null</div>`;
         }
       } else if (viewer && viewer.shadowRoot) {
-        const canvas = viewer.shadowRoot.querySelector('canvas');
+        const canvas = viewer.shadowRoot.querySelector("canvas");
         if (canvas) {
           imageBase64 = canvas.toDataURL("image/jpeg", 0.85);
         } else {
-           debugHtml = `<div style="color:red; font-size:10px;">[Debug] No canvas found in shadowRoot</div>`;
+          debugHtml = `<div style="color:red; font-size:10px;">[Debug] No canvas found in shadowRoot</div>`;
         }
       }
     } catch (e) {
       debugHtml = `<div style="color:red; font-size:10px;">[Debug] Exception: ${e}</div>`;
     }
-    
+
     if (imageBase64) {
       debugHtml = `<img src="${imageBase64}" style="width:100px; border:2px solid lime; display:block; margin-bottom:10px;" />`;
     } else if (!debugHtml) {
       debugHtml = `<div style="color:red; font-size:10px;">[Debug] Image capture failed silently.</div>`;
     }
-    
-    aiOutput.innerHTML = `<div class="status-pill"><div class="spinner"></div><span>${IntLayer.t.aiLoading}</span></div>` + debugHtml;
+
+    aiOutput.innerHTML =
+      `<div class="status-pill"><div class="spinner"></div><span>${IntLayer.t.aiLoading}</span></div>` +
+      debugHtml;
   }
 
   const payload = JSON.stringify({
@@ -930,17 +1002,24 @@ async function runAdvice(
       isStreaming = true;
     }
     streamedText += token;
-    
+
     // Clean conversational preamble dynamically
     let displayText = streamedText;
-    const objectMatch = displayText.match(/- Object:/i) || displayText.match(/- \*\*Object:/i);
+    const objectMatch =
+      displayText.match(/- Object:/i) || displayText.match(/- \*\*Object:/i);
     if (objectMatch && objectMatch.index && objectMatch.index > 0) {
       displayText = displayText.substring(objectMatch.index);
-    } else if (!objectMatch && displayText.length > 50 && !displayText.includes("- ")) {
+    } else if (
+      !objectMatch &&
+      displayText.length > 50 &&
+      !displayText.includes("- ")
+    ) {
       // If no bullet is found yet and text is long, just show it
     }
-    
-    aiOutput.innerHTML = debugHtml + `<div class="ai-insight-card">${formatMarkdown(displayText)}</div>`;
+
+    aiOutput.innerHTML =
+      debugHtml +
+      `<div class="ai-insight-card">${formatMarkdown(displayText)}</div>`;
     aiOutput.scrollTop = aiOutput.scrollHeight;
   });
 
@@ -953,14 +1032,21 @@ async function runAdvice(
     const aiResponse = await GenerateRenovationAdvice(payload);
     if (!isStreaming) {
       aiOutput.innerHTML = debugHtml;
-      typeWriter(`<div class="ai-insight-card">${formatMarkdown(aiResponse)}</div>`, aiOutput);
+      typeWriter(
+        `<div class="ai-insight-card">${formatMarkdown(aiResponse)}</div>`,
+        aiOutput,
+      );
     } else {
       let finalResponse = aiResponse;
-      const objectMatch = finalResponse.match(/- Object:/i) || finalResponse.match(/- \*\*Object:/i);
+      const objectMatch =
+        finalResponse.match(/- Object:/i) ||
+        finalResponse.match(/- \*\*Object:/i);
       if (objectMatch && objectMatch.index && objectMatch.index > 0) {
         finalResponse = finalResponse.substring(objectMatch.index);
       }
-      aiOutput.innerHTML = debugHtml + `<div class="ai-insight-card">${formatMarkdown(finalResponse)}</div>`;
+      aiOutput.innerHTML =
+        debugHtml +
+        `<div class="ai-insight-card">${formatMarkdown(finalResponse)}</div>`;
     }
   } catch (error) {
     aiOutput.textContent = String(error);
@@ -1149,7 +1235,8 @@ function isSupportedAsset(path: string): boolean {
 
 function getSelectedModel(): ModelChoice {
   const value = getEl<HTMLSelectElement>("llm-model").value as ModelChoice;
-  if (value === "llama3" || value === "mistral" || value === "llava") return value;
+  if (value === "llama3" || value === "mistral" || value === "llava")
+    return value;
   return "gemma:2b";
 }
 
@@ -1219,7 +1306,7 @@ function initTheme(): void {
 
 function toggleTheme(event?: MouseEvent): void {
   const nextTheme = document.body.dataset.theme === "light" ? "dark" : "light";
-  
+
   if (!document.startViewTransition || !event) {
     applyTheme(nextTheme);
     return;
@@ -1229,7 +1316,7 @@ function toggleTheme(event?: MouseEvent): void {
   const y = event.clientY;
   const endRadius = Math.hypot(
     Math.max(x, innerWidth - x),
-    Math.max(y, innerHeight - y)
+    Math.max(y, innerHeight - y),
   );
 
   const transition = document.startViewTransition(() => {
@@ -1239,7 +1326,7 @@ function toggleTheme(event?: MouseEvent): void {
   transition.ready.then(() => {
     const clipPath = [
       `circle(0px at ${x}px ${y}px)`,
-      `circle(${endRadius}px at ${x}px ${y}px)`
+      `circle(${endRadius}px at ${x}px ${y}px)`,
     ];
     document.documentElement.animate(
       {
@@ -1248,8 +1335,11 @@ function toggleTheme(event?: MouseEvent): void {
       {
         duration: 500,
         easing: "ease-in",
-        pseudoElement: nextTheme === "dark" ? "::view-transition-old(root)" : "::view-transition-new(root)",
-      }
+        pseudoElement:
+          nextTheme === "dark"
+            ? "::view-transition-old(root)"
+            : "::view-transition-new(root)",
+      },
     );
   });
 }
@@ -1264,7 +1354,7 @@ function applyTheme(theme: string): void {
 function updateBppLabel(): void {
   getEl<HTMLSpanElement>("bpp-val").textContent =
     `${currentBpp} ${IntLayer.t.bppUnit}`;
-    
+
   const stepsVal = getEl<HTMLSpanElement>("steps-val");
   if (stepsVal) {
     stepsVal.textContent = currentSteps;
@@ -1274,8 +1364,6 @@ function updateBppLabel(): void {
 function requestViewerResize(): void {
   syncComparisonLayout();
 }
-
-
 
 function safeJsonParse<T>(value: string): T | null {
   try {
@@ -1301,10 +1389,10 @@ function renderTelemetryHTML(data: any): string {
   if (!data || typeof data !== "object") return String(data);
   const lang = IntLayer.currentLang || "en";
 
-  const t = (en: string, pl: string) => lang === "pl" ? pl : en;
+  const t = (en: string, pl: string) => (lang === "pl" ? pl : en);
 
   let html = `<div class="telemetry-grid">`;
-  
+
   if (data.total_vertices !== undefined) {
     html += `
       <div class="metric-card">
@@ -1321,7 +1409,7 @@ function renderTelemetryHTML(data: any): string {
       </div>
     `;
   }
-  
+
   if (data.mesh_count !== undefined) {
     html += `
       <div class="metric-card">
@@ -1330,7 +1418,7 @@ function renderTelemetryHTML(data: any): string {
       </div>
     `;
   }
-  
+
   if (data.texture_count !== undefined) {
     html += `
       <div class="metric-card">
@@ -1339,7 +1427,7 @@ function renderTelemetryHTML(data: any): string {
       </div>
     `;
   }
-  
+
   if (data.material_count !== undefined) {
     html += `
       <div class="metric-card">
@@ -1348,7 +1436,7 @@ function renderTelemetryHTML(data: any): string {
       </div>
     `;
   }
-  
+
   if (data.total_prim_count !== undefined) {
     html += `
       <div class="metric-card">
@@ -1357,19 +1445,23 @@ function renderTelemetryHTML(data: any): string {
       </div>
     `;
   }
-  
+
   if (data.status !== undefined) {
     html += `
       <div class="metric-card" style="grid-column: span 2;">
         <span class="metric-title">${t("Status", "Status")}</span>
-        <span class="metric-value" style="color: ${data.status === 'success' ? 'var(--accent-teal)' : '#e53e3e'}">${data.status.toUpperCase()}</span>
+        <span class="metric-value" style="color: ${data.status === "success" ? "var(--accent-teal)" : "#e53e3e"}">${data.status.toUpperCase()}</span>
       </div>
     `;
   }
-  
+
   html += `</div>`;
 
-  if (data.ntc_compressed_files && Array.isArray(data.ntc_compressed_files) && data.ntc_compressed_files.length > 0) {
+  if (
+    data.ntc_compressed_files &&
+    Array.isArray(data.ntc_compressed_files) &&
+    data.ntc_compressed_files.length > 0
+  ) {
     let savedTotal = 0;
     let totalTime = 0;
     let avgReduction = 0;
@@ -1385,7 +1477,7 @@ function renderTelemetryHTML(data: any): string {
         validFiles++;
       }
     });
-    
+
     if (validFiles > 0) avgReduction /= validFiles;
 
     html += `
@@ -1415,23 +1507,28 @@ function renderTelemetryHTML(data: any): string {
 }
 
 function initTelemetryCharts(data: any): void {
-  if (!data || !data.ntc_compressed_files || !Array.isArray(data.ntc_compressed_files) || data.ntc_compressed_files.length === 0) {
+  if (
+    !data ||
+    !data.ntc_compressed_files ||
+    !Array.isArray(data.ntc_compressed_files) ||
+    data.ntc_compressed_files.length === 0
+  ) {
     return;
   }
-  
+
   const canvas = document.getElementById("vramChart") as HTMLCanvasElement;
   if (!canvas) return;
-  
+
   let rawVram = 0;
   let ntcVram = 0;
-  
+
   data.ntc_compressed_files.forEach((file: any) => {
     rawVram += Number(file.raw_vram_mb) || 0;
     ntcVram += Number(file.ntc_vram_mb) || 0;
   });
-  
+
   const lang = IntLayer.currentLang || "en";
-  const t = (en: string, pl: string) => lang === "pl" ? pl : en;
+  const t = (en: string, pl: string) => (lang === "pl" ? pl : en);
 
   const existingChart = Chart.getChart(canvas);
   if (existingChart) {
@@ -1439,43 +1536,50 @@ function initTelemetryCharts(data: any): void {
   }
 
   new Chart(canvas, {
-    type: 'doughnut',
+    type: "doughnut",
     data: {
-      labels: [t('Original (Removed)', 'Oryginał (Usunięty)'), t('NTC Compressed', 'Skompresowane NTC')],
-      datasets: [{
-        data: [Math.max(0, rawVram - ntcVram), ntcVram],
-        backgroundColor: [
-          '#2D3748',
-          '#0D9488'
-        ],
-        borderWidth: 0,
-        hoverOffset: 4
-      }]
+      labels: [
+        t("Original (Removed)", "Oryginał (Usunięty)"),
+        t("NTC Compressed", "Skompresowane NTC"),
+      ],
+      datasets: [
+        {
+          data: [Math.max(0, rawVram - ntcVram), ntcVram],
+          backgroundColor: ["#2D3748", "#0D9488"],
+          borderWidth: 0,
+          hoverOffset: 4,
+        },
+      ],
     },
     options: {
       responsive: true,
       maintainAspectRatio: false,
       plugins: {
         legend: {
-          position: 'bottom',
+          position: "bottom",
           labels: {
-            color: '#A0AEC0',
+            color: "#A0AEC0",
             font: {
               family: "'JetBrains Mono', monospace",
-              size: 10
-            }
-          }
+              size: 10,
+            },
+          },
         },
         tooltip: {
           callbacks: {
-            label: function(context) {
-              return ' ' + context.label + ': ' + Number(context.raw).toFixed(2) + ' MB';
-            }
-          }
-        }
+            label: function (context) {
+              return (
+                " " +
+                context.label +
+                ": " +
+                Number(context.raw).toFixed(2) +
+                " MB"
+              );
+            },
+          },
+        },
       },
-      cutout: '70%'
-    }
+      cutout: "70%",
+    },
   });
 }
-

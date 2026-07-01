@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -13,6 +14,10 @@ import (
 	"strings"
 	"time"
 
+	pb "changeme/pipeline_rpc"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+
 	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
@@ -22,9 +27,10 @@ type App struct{}
 // OllamaRequest represents the request payload for the Ollama API
 type OllamaRequest struct {
 	Model  string   `json:"model"`
-	Prompt string   `json:"prompt"`
-	Stream bool     `json:"stream"`
-	Images []string `json:"images,omitempty"`
+	Prompt  string                 `json:"prompt"`
+	Stream  bool                   `json:"stream"`
+	Images  []string               `json:"images,omitempty"`
+	Options map[string]interface{} `json:"options,omitempty"`
 }
 
 // OllamaResponse represents the response payload from the Ollama API
@@ -82,6 +88,11 @@ func (a *App) GenerateRenovationAdvice(telemetryJSON string) (string, error) {
 		compressionStr = "NTC Compression: Bypassed. No VRAM savings."
 	}
 
+	// Prune massive arrays to save LLM context
+	delete(telemetryMap, "ntc_compressed_files")
+	cleanedTelemetryBytes, _ := json.Marshal(telemetryMap)
+	telemetryForPrompt = string(cleanedTelemetryBytes)
+
 	// Task 3: Strict Anti-Conversational Prompt
 	var prompt string
 	if imageBase64 != "" {
@@ -110,9 +121,10 @@ JSON DATA:
 	}
 
 	reqBody := OllamaRequest{
-		Model:  model,
-		Prompt: prompt,
-		Stream: true, // Switched to streaming
+		Model:   model,
+		Prompt:  prompt,
+		Stream:  true, // Switched to streaming
+		Options: map[string]interface{}{"num_ctx": 16384},
 	}
 
 	if imageBase64 != "" {
@@ -340,60 +352,57 @@ func (a *App) ProcessModel(absolutePath string, bpp string, steps string) (strin
 		return "", fmt.Errorf("unsupported asset format %q", ext)
 	}
 
-	// 2. PRODUCTION PIPELINE: Execute MLOps Docker Container for OpenUSD
-	modelDir := filepath.Dir(absolutePath)
-	fileName := filepath.Base(absolutePath)
-
-	// Docker CLI execution arguments
-	cmdArgs := []string{
-		"run", "--rm", "--gpus", "all",
-		"-v", fmt.Sprintf("%s:/workspace", modelDir),
-		"nequ3d-core:latest",
-		"python3", "/app/process_usd_file.py",
-		fmt.Sprintf("/workspace/%s", fileName),
-		bpp,
-		steps,
-	}
-
-	cmd := exec.Command("docker", cmdArgs...)
-
-	stdout, err := cmd.StdoutPipe()
+	// 2. PRODUCTION PIPELINE: gRPC Call to Python Backend
+	conn, err := grpc.NewClient("localhost:50051", grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
-		return "", fmt.Errorf("stdout pipe error: %v", err)
+		return "", fmt.Errorf("failed to connect to gRPC server: %v", err)
+	}
+	defer conn.Close()
+
+	client := pb.NewNtcPipelineServiceClient(conn)
+
+	bppInt, _ := strconv.Atoi(bpp)
+	stepsInt, _ := strconv.Atoi(steps)
+
+	req := &pb.ProcessModelRequest{
+		AbsolutePath:  absolutePath,
+		TargetBitrate: int32(bppInt),
+		TrainingSteps: int32(stepsInt),
 	}
 
-	// Merge Stderr into Stdout to capture Python and CUDA exceptions uniformly
-	cmd.Stderr = cmd.Stdout
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	defer cancel()
 
-	if err := cmd.Start(); err != nil {
-		return "", fmt.Errorf("failed to start Docker container: %v", err)
+	stream, err := client.ProcessModel(ctx, req)
+	if err != nil {
+		return "", fmt.Errorf("gRPC ProcessModel stream failed: %v", err)
 	}
 
 	var jsonResult string
-	scanner := bufio.NewScanner(stdout)
-	scanner.Buffer(make([]byte, 64*1024), 16*1024*1024)
 
-	// Stream and parse Docker output line-by-line
-	for scanner.Scan() {
-		line := scanner.Text()
-		fmt.Println("[Docker Core Stream]", line)
+	for {
+		update, err := stream.Recv()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return "", fmt.Errorf("błąd strumieniowania gRPC: %v", err)
+		}
 
-		if p, ok := strings.CutPrefix(line, "Telemetry: "); ok {
-			jsonResult = p
+		switch update.UpdateType {
+		case "info":
+			fmt.Println("[gRPC Stream]", update.Message)
+			// Emit live log to frontend if you want to show it in the UI!
+			application.Get().Event.Emit("pipelineLog", update.Message)
+		case "error":
+			return "", fmt.Errorf("pipeline error: %s", update.Message)
+		case "result":
+			jsonResult = update.TelemetryJson
 		}
 	}
 
-	if err := scanner.Err(); err != nil {
-		fmt.Println("[Edge Router] Scanner stream error:", err)
-	}
-
-	// Wait for process completion to release GPU resources
-	if err := cmd.Wait(); err != nil {
-		return "", fmt.Errorf("docker execution failed (check terminal for GPU logs): %v", err)
-	}
-
-	if jsonResult == "" {
-		return "", fmt.Errorf("container executed successfully but returned no JSON telemetry")
+	if jsonResult == "" || jsonResult == "{}" {
+		return "", fmt.Errorf("pipeline executed successfully but returned no JSON telemetry")
 	}
 
 	return jsonResult, nil

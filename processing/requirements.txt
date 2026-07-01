@@ -1,1 +1,6 @@
 usd-core==26.5
+trimesh
+numpy
+Pillow
+grpcio
+grpcio-tools
