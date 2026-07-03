@@ -4,3 +4,5 @@ numpy
 Pillow
 grpcio
 grpcio-tools
+prometheus-client
+python-json-logger

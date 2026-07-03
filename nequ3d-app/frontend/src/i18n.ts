@@ -62,6 +62,7 @@ export const content = {
     dataIngestion: "DATA INGESTION",
     loadAssetBtn: "LOAD ASSET",
     targetBitrate: "TARGET BITRATE",
+    trainingSteps: "TRAINING STEPS",
     analyticsEngine: "ANALYTICS ENGINE",
   },
   pl: {
@@ -116,13 +117,14 @@ export const content = {
     geometryOnly:
       "Aktywna analiza samej geometrii. NTC zostało pominięte dla tego zasobu.",
     loadSplatFailed: "Nie można wczytać wybranego środowiska 3DGS.",
-    gpuEngine: "SILNIK GPU",
+    gpuEngine: "OBCIĄŻENIE GPU",
     vramLoad: "OBCIĄŻENIE VRAM",
     sysClock: "ZEGAR SYSTEMOWY",
-    pipelineTimer: "CZAS POTOKU",
+    pipelineTimer: "POMIAR",
     dataIngestion: "POBIERANIE DANYCH",
     loadAssetBtn: "WCZYTAJ",
     targetBitrate: "DOCELOWY BITRATE",
+    trainingSteps: "KROKI TRENINGU",
     analyticsEngine: "SILNIK ANALITYCZNY",
   },
 } as const;

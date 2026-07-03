@@ -15,6 +15,7 @@ import (
 	"time"
 
 	pb "changeme/pipeline_rpc"
+
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
@@ -26,11 +27,11 @@ type App struct{}
 
 // OllamaRequest represents the request payload for the Ollama API
 type OllamaRequest struct {
-	Model  string   `json:"model"`
-	Prompt  string                 `json:"prompt"`
-	Stream  bool                   `json:"stream"`
-	Images  []string               `json:"images,omitempty"`
-	Options map[string]interface{} `json:"options,omitempty"`
+	Model   string         `json:"model"`
+	Prompt  string         `json:"prompt"`
+	Stream  bool           `json:"stream"`
+	Images  []string       `json:"images,omitempty"`
+	Options map[string]any `json:"options,omitempty"`
 }
 
 // OllamaResponse represents the response payload from the Ollama API
@@ -80,7 +81,28 @@ func (a *App) GenerateRenovationAdvice(telemetryJSON string) (string, error) {
 	ntcBypassed, _ := telemetryMap["ntc_bypassed"].(bool)
 	vramReductionStr, _ := telemetryMap["vram_reduction"].(string)
 	if vramReductionStr == "" {
-		vramReductionStr = "0%"
+		if files, ok := telemetryMap["ntc_compressed_files"].([]any); ok {
+			var total float64
+			var count int
+			for _, f := range files {
+				if fm, ok := f.(map[string]any); ok {
+					if vramRed, ok := fm["vram_reduction"].(string); ok {
+						vramRed = strings.ReplaceAll(vramRed, "%", "")
+						if val, err := strconv.ParseFloat(vramRed, 64); err == nil {
+							total += val
+							count++
+						}
+					}
+				}
+			}
+			if count > 0 {
+				vramReductionStr = fmt.Sprintf("%.1f%%", total/float64(count))
+			} else {
+				vramReductionStr = "0%"
+			}
+		} else {
+			vramReductionStr = "0%"
+		}
 	}
 
 	compressionStr := "NTC Compression: Active. VRAM Reduction: " + vramReductionStr
@@ -124,7 +146,7 @@ JSON DATA:
 		Model:   model,
 		Prompt:  prompt,
 		Stream:  true, // Switched to streaming
-		Options: map[string]interface{}{"num_ctx": 16384},
+		Options: map[string]any{"num_ctx": 16384},
 	}
 
 	if imageBase64 != "" {
@@ -311,7 +333,7 @@ func (a *App) ProcessModel(absolutePath string, bpp string, steps string) (strin
 		steps = "150"
 	}
 
-	// 1. FAST TRACK: If WebGL format (GLB/GLTF), bypass Core processing
+	// FAST TRACK: If WebGL format (GLB/GLTF), bypass Core processing
 	ext := strings.ToLower(filepath.Ext(absolutePath))
 	if ext == ".glb" || ext == ".gltf" {
 		proxyResponse, err := json.Marshal(map[string]any{
@@ -352,7 +374,7 @@ func (a *App) ProcessModel(absolutePath string, bpp string, steps string) (strin
 		return "", fmt.Errorf("unsupported asset format %q", ext)
 	}
 
-	// 2. PRODUCTION PIPELINE: gRPC Call to Python Backend
+	// PRODUCTION PIPELINE: gRPC Call to Python Backend
 	conn, err := grpc.NewClient("localhost:50051", grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		return "", fmt.Errorf("failed to connect to gRPC server: %v", err)
@@ -386,7 +408,7 @@ func (a *App) ProcessModel(absolutePath string, bpp string, steps string) (strin
 			break
 		}
 		if err != nil {
-			return "", fmt.Errorf("błąd strumieniowania gRPC: %v", err)
+			return "", fmt.Errorf("error receiving gRPC stream: %v", err)
 		}
 
 		switch update.UpdateType {

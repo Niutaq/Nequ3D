@@ -325,9 +325,9 @@ function initUI(): void {
             <button id="btn-lang-pl" class="view-tab">PL</button>
           </div>
           <div class="segmented text-scale-control">
-            <button id="btn-size-sm" class="view-tab" data-i18n-title="sizeSmall" data-i18n-aria="sizeSmall">A-</button>
-            <button id="btn-size-md" class="view-tab" data-i18n-title="sizeMedium" data-i18n-aria="sizeMedium">A</button>
-            <button id="btn-size-lg" class="view-tab" data-i18n-title="sizeLarge" data-i18n-aria="sizeLarge">A+</button>
+            <button id="btn-size-sm" class="view-tab" style="font-size: 0.75rem; font-weight: bold;" data-i18n-title="sizeSmall" data-i18n-aria="sizeSmall">A-</button>
+            <button id="btn-size-md" class="view-tab" style="font-size: 0.95rem; font-weight: bold;" data-i18n-title="sizeMedium" data-i18n-aria="sizeMedium">A</button>
+            <button id="btn-size-lg" class="view-tab" style="font-size: 1.15rem; font-weight: bold;" data-i18n-title="sizeLarge" data-i18n-aria="sizeLarge">A+</button>
           </div>
           <button id="theme-toggle" class="technical-button" style="padding: 0; width: 44px; height: 44px; display: grid; place-items: center;" data-i18n-title="themeToggle">${Icons.moon}</button>
         </div>
@@ -352,7 +352,7 @@ function initUI(): void {
           <input type="range" id="bpp-slider" min="1" max="8" step="1" value="5">
 
           <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 8px;">
-            <span class="telemetry-label">Training Steps</span>
+            <span class="telemetry-label" data-i18n="trainingSteps"></span>
             <span id="steps-val" class="telemetry-value" style="font-size: 0.8rem; color: var(--accent-teal);"></span>
           </div>
           <input type="range" id="steps-slider" min="50" max="1000" step="50" value="150">
@@ -467,12 +467,13 @@ function attachEventListeners(): void {
   const analyzeBtn = getEl<HTMLButtonElement>("analyze-btn");
 
   Events.On("pipelineLog", (ev: any) => {
-    const outputPre = getEl<HTMLElement>("output");
     // Wails v3 event data is usually ev.data[0]
-    const message = ev.data && ev.data.length > 0 ? ev.data[0] : String(ev);
-    outputPre.innerHTML = `<div style="padding:20px; font-family:var(--font-mono); color:var(--accent-teal); font-size:1.1rem; display:flex; align-items:center; gap:12px;">
-      <div class="spinner"></div> <span>${message}</span>
-    </div>`;
+    const rawMessage = ev.data && ev.data.length > 0 ? ev.data[0] : String(ev);
+
+    // Tymczasowo wyłączone wyświetlanie logów Dockera z powodu krzaków
+    // outputPre.innerHTML = `<div style="padding:20px; font-family:var(--font-mono); color:var(--accent-teal); font-size:1.1rem; display:flex; align-items:center; gap:12px;">
+    //  <div class="spinner"></div> <span>${rawMessage}</span>
+    // </div>`;
   });
   const divider = getEl<HTMLDivElement>("comp-divider");
   const compLayer = getEl<HTMLDivElement>("comparison-layer");
@@ -985,7 +986,7 @@ async function runAdvice(
     analysis_mode: qualityAvailable ? "mesh_ntc" : "geometry_only",
     ntc_bypassed: !qualityAvailable || Boolean(parsedTelemetry.ntc_bypassed),
     instruction_context: qualityAvailable
-      ? "CRITICAL RULE: NEVER invent, hallucinate, or guess VRAM savings percentages (e.g., 0% or 84.4%). You MUST ONLY report the exact VRAM reduction values explicitly present in the provided JSON telemetry. If the JSON lacks these values, do NOT make them up. Discuss mesh geometry and NTC texture compression accurately based ONLY on the data."
+      ? "CRITICAL RULE: You MUST ONLY report the exact VRAM reduction values explicitly present in the provided JSON telemetry (e.g. in the 'vram_reduction' field). If the JSON lacks these values, do NOT make them up. Discuss mesh geometry and NTC texture compression accurately based ONLY on the data."
       : "CRITICAL RULE: Focus purely on mesh geometry and structure. Do NOT mention or claim any NTC VRAM savings because NTC was bypassed. NEVER guess or hallucinate VRAM values.",
     telemetry: parsedTelemetry,
     raw_telemetry: rawTelemetry,
@@ -1144,7 +1145,14 @@ function updateSystemStats(stats: SysStats): void {
 }
 
 function parseTelemetry(raw: string): PipelineTelemetry {
-  const parsed = JSON.parse(raw) as PipelineTelemetry;
+  // Usuwamy absolutnie wszystko co jest ANSI i carriage returns
+  const cleanRaw = raw
+    .replace(
+      /[\u001b\u009b][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><]/g,
+      "",
+    )
+    .replace(/\r/g, "");
+  const parsed = JSON.parse(cleanRaw) as PipelineTelemetry;
   return parsed;
 }
 
