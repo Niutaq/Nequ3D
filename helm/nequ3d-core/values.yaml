@@ -1,8 +1,8 @@
 replicaCount: 1
 
 image:
-  repository: ghcr.io/niutaq/nequ3d-core
-  pullPolicy: IfNotPresent
+  repository: nequ3d-core
+  pullPolicy: Never
   tag: "latest"
 
 imagePullSecrets: []
