@@ -8,7 +8,7 @@ spec:
   source:
     repoURL: 'https://github.com/Niutaq/Nequ3D.git'
     path: 'helm/nequ3d-core'
-    targetRevision: HEAD
+    targetRevision: feature/locate-anything
   destination:
     server: 'https://kubernetes.default.svc'
     namespace: default
