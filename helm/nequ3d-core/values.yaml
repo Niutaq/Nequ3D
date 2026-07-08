@@ -1,8 +1,8 @@
 replicaCount: 1
 
 image:
-  repository: host.docker.internal:5000/nequ3d-core
-  pullPolicy: Always
+  repository: nequ3d-core
+  pullPolicy: IfNotPresent
   tag: "latest"
 
 imagePullSecrets: []
