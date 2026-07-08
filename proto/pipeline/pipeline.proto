@@ -5,20 +5,22 @@ package pipeline;
 option go_package = "./pipeline_rpc";
 
 service NtcPipelineService {
-  rpc ProcessModel (ProcessModelRequest) returns (stream ProcessModelResponse);
+  rpc ProcessModel(ProcessModelRequest) returns (stream ProcessModelResponse);
+  rpc LocateObjects(LocateRequest) returns (LocateResponse);
 }
 
 message ProcessModelRequest {
-  string absolute_path = 1;
-  int32 target_bitrate = 2;
-  int32 training_steps = 3;
+  string file_name = 1;
+  bytes file_data = 2;
+  int32 target_bitrate = 3;
+  int32 training_steps = 4;
 }
 
 message ProcessModelResponse {
   // "info", "progress", "result", "error"
   string update_type = 1;
   string message = 2;
-  
+
   // Used when update_type == "progress"
   int32 current_step = 3;
   int32 total_steps = 4;
@@ -26,4 +28,22 @@ message ProcessModelResponse {
 
   // Used when update_type == "result"
   string telemetry_json = 6;
+}
+
+message LocateRequest {
+  bytes image_data = 1;
+  string prompt = 2;
+}
+
+message LocateResponse {
+  message BoundingBox {
+    float xmin = 1;
+    float ymin = 2;
+    float xmax = 3;
+    float ymax = 4;
+    string label = 5;
+    float confidence = 6;
+  }
+  repeated BoundingBox detections = 1;
+  string message = 2;
 }

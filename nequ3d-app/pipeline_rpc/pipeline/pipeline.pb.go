@@ -23,9 +23,10 @@ const (
 
 type ProcessModelRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	AbsolutePath  string                 `protobuf:"bytes,1,opt,name=absolute_path,json=absolutePath,proto3" json:"absolute_path,omitempty"`
-	TargetBitrate int32                  `protobuf:"varint,2,opt,name=target_bitrate,json=targetBitrate,proto3" json:"target_bitrate,omitempty"`
-	TrainingSteps int32                  `protobuf:"varint,3,opt,name=training_steps,json=trainingSteps,proto3" json:"training_steps,omitempty"`
+	FileName      string                 `protobuf:"bytes,1,opt,name=file_name,json=fileName,proto3" json:"file_name,omitempty"`
+	FileData      []byte                 `protobuf:"bytes,2,opt,name=file_data,json=fileData,proto3" json:"file_data,omitempty"`
+	TargetBitrate int32                  `protobuf:"varint,3,opt,name=target_bitrate,json=targetBitrate,proto3" json:"target_bitrate,omitempty"`
+	TrainingSteps int32                  `protobuf:"varint,4,opt,name=training_steps,json=trainingSteps,proto3" json:"training_steps,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -60,11 +61,18 @@ func (*ProcessModelRequest) Descriptor() ([]byte, []int) {
 	return file_pipeline_pipeline_proto_rawDescGZIP(), []int{0}
 }
 
-func (x *ProcessModelRequest) GetAbsolutePath() string {
+func (x *ProcessModelRequest) GetFileName() string {
 	if x != nil {
-		return x.AbsolutePath
+		return x.FileName
 	}
 	return ""
+}
+
+func (x *ProcessModelRequest) GetFileData() []byte {
+	if x != nil {
+		return x.FileData
+	}
+	return nil
 }
 
 func (x *ProcessModelRequest) GetTargetBitrate() int32 {
@@ -168,15 +176,204 @@ func (x *ProcessModelResponse) GetTelemetryJson() string {
 	return ""
 }
 
+type LocateRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ImageData     []byte                 `protobuf:"bytes,1,opt,name=image_data,json=imageData,proto3" json:"image_data,omitempty"`
+	Prompt        string                 `protobuf:"bytes,2,opt,name=prompt,proto3" json:"prompt,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *LocateRequest) Reset() {
+	*x = LocateRequest{}
+	mi := &file_pipeline_pipeline_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *LocateRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*LocateRequest) ProtoMessage() {}
+
+func (x *LocateRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_pipeline_pipeline_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use LocateRequest.ProtoReflect.Descriptor instead.
+func (*LocateRequest) Descriptor() ([]byte, []int) {
+	return file_pipeline_pipeline_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *LocateRequest) GetImageData() []byte {
+	if x != nil {
+		return x.ImageData
+	}
+	return nil
+}
+
+func (x *LocateRequest) GetPrompt() string {
+	if x != nil {
+		return x.Prompt
+	}
+	return ""
+}
+
+type LocateResponse struct {
+	state         protoimpl.MessageState        `protogen:"open.v1"`
+	Detections    []*LocateResponse_BoundingBox `protobuf:"bytes,1,rep,name=detections,proto3" json:"detections,omitempty"`
+	Message       string                        `protobuf:"bytes,2,opt,name=message,proto3" json:"message,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *LocateResponse) Reset() {
+	*x = LocateResponse{}
+	mi := &file_pipeline_pipeline_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *LocateResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*LocateResponse) ProtoMessage() {}
+
+func (x *LocateResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_pipeline_pipeline_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use LocateResponse.ProtoReflect.Descriptor instead.
+func (*LocateResponse) Descriptor() ([]byte, []int) {
+	return file_pipeline_pipeline_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *LocateResponse) GetDetections() []*LocateResponse_BoundingBox {
+	if x != nil {
+		return x.Detections
+	}
+	return nil
+}
+
+func (x *LocateResponse) GetMessage() string {
+	if x != nil {
+		return x.Message
+	}
+	return ""
+}
+
+type LocateResponse_BoundingBox struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Xmin          float32                `protobuf:"fixed32,1,opt,name=xmin,proto3" json:"xmin,omitempty"`
+	Ymin          float32                `protobuf:"fixed32,2,opt,name=ymin,proto3" json:"ymin,omitempty"`
+	Xmax          float32                `protobuf:"fixed32,3,opt,name=xmax,proto3" json:"xmax,omitempty"`
+	Ymax          float32                `protobuf:"fixed32,4,opt,name=ymax,proto3" json:"ymax,omitempty"`
+	Label         string                 `protobuf:"bytes,5,opt,name=label,proto3" json:"label,omitempty"`
+	Confidence    float32                `protobuf:"fixed32,6,opt,name=confidence,proto3" json:"confidence,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *LocateResponse_BoundingBox) Reset() {
+	*x = LocateResponse_BoundingBox{}
+	mi := &file_pipeline_pipeline_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *LocateResponse_BoundingBox) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*LocateResponse_BoundingBox) ProtoMessage() {}
+
+func (x *LocateResponse_BoundingBox) ProtoReflect() protoreflect.Message {
+	mi := &file_pipeline_pipeline_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use LocateResponse_BoundingBox.ProtoReflect.Descriptor instead.
+func (*LocateResponse_BoundingBox) Descriptor() ([]byte, []int) {
+	return file_pipeline_pipeline_proto_rawDescGZIP(), []int{3, 0}
+}
+
+func (x *LocateResponse_BoundingBox) GetXmin() float32 {
+	if x != nil {
+		return x.Xmin
+	}
+	return 0
+}
+
+func (x *LocateResponse_BoundingBox) GetYmin() float32 {
+	if x != nil {
+		return x.Ymin
+	}
+	return 0
+}
+
+func (x *LocateResponse_BoundingBox) GetXmax() float32 {
+	if x != nil {
+		return x.Xmax
+	}
+	return 0
+}
+
+func (x *LocateResponse_BoundingBox) GetYmax() float32 {
+	if x != nil {
+		return x.Ymax
+	}
+	return 0
+}
+
+func (x *LocateResponse_BoundingBox) GetLabel() string {
+	if x != nil {
+		return x.Label
+	}
+	return ""
+}
+
+func (x *LocateResponse_BoundingBox) GetConfidence() float32 {
+	if x != nil {
+		return x.Confidence
+	}
+	return 0
+}
+
 var File_pipeline_pipeline_proto protoreflect.FileDescriptor
 
 const file_pipeline_pipeline_proto_rawDesc = "" +
 	"\n" +
-	"\x17pipeline/pipeline.proto\x12\bpipeline\"\x88\x01\n" +
-	"\x13ProcessModelRequest\x12#\n" +
-	"\rabsolute_path\x18\x01 \x01(\tR\fabsolutePath\x12%\n" +
-	"\x0etarget_bitrate\x18\x02 \x01(\x05R\rtargetBitrate\x12%\n" +
-	"\x0etraining_steps\x18\x03 \x01(\x05R\rtrainingSteps\"\xdf\x01\n" +
+	"\x17pipeline/pipeline.proto\x12\bpipeline\"\x9d\x01\n" +
+	"\x13ProcessModelRequest\x12\x1b\n" +
+	"\tfile_name\x18\x01 \x01(\tR\bfileName\x12\x1b\n" +
+	"\tfile_data\x18\x02 \x01(\fR\bfileData\x12%\n" +
+	"\x0etarget_bitrate\x18\x03 \x01(\x05R\rtargetBitrate\x12%\n" +
+	"\x0etraining_steps\x18\x04 \x01(\x05R\rtrainingSteps\"\xdf\x01\n" +
 	"\x14ProcessModelResponse\x12\x1f\n" +
 	"\vupdate_type\x18\x01 \x01(\tR\n" +
 	"updateType\x12\x18\n" +
@@ -185,9 +382,28 @@ const file_pipeline_pipeline_proto_rawDesc = "" +
 	"\vtotal_steps\x18\x04 \x01(\x05R\n" +
 	"totalSteps\x12!\n" +
 	"\fcurrent_loss\x18\x05 \x01(\x02R\vcurrentLoss\x12%\n" +
-	"\x0etelemetry_json\x18\x06 \x01(\tR\rtelemetryJson2e\n" +
+	"\x0etelemetry_json\x18\x06 \x01(\tR\rtelemetryJson\"F\n" +
+	"\rLocateRequest\x12\x1d\n" +
+	"\n" +
+	"image_data\x18\x01 \x01(\fR\timageData\x12\x16\n" +
+	"\x06prompt\x18\x02 \x01(\tR\x06prompt\"\x86\x02\n" +
+	"\x0eLocateResponse\x12D\n" +
+	"\n" +
+	"detections\x18\x01 \x03(\v2$.pipeline.LocateResponse.BoundingBoxR\n" +
+	"detections\x12\x18\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\x1a\x93\x01\n" +
+	"\vBoundingBox\x12\x12\n" +
+	"\x04xmin\x18\x01 \x01(\x02R\x04xmin\x12\x12\n" +
+	"\x04ymin\x18\x02 \x01(\x02R\x04ymin\x12\x12\n" +
+	"\x04xmax\x18\x03 \x01(\x02R\x04xmax\x12\x12\n" +
+	"\x04ymax\x18\x04 \x01(\x02R\x04ymax\x12\x14\n" +
+	"\x05label\x18\x05 \x01(\tR\x05label\x12\x1e\n" +
+	"\n" +
+	"confidence\x18\x06 \x01(\x02R\n" +
+	"confidence2\xa9\x01\n" +
 	"\x12NtcPipelineService\x12O\n" +
-	"\fProcessModel\x12\x1d.pipeline.ProcessModelRequest\x1a\x1e.pipeline.ProcessModelResponse0\x01B\x10Z\x0e./pipeline_rpcb\x06proto3"
+	"\fProcessModel\x12\x1d.pipeline.ProcessModelRequest\x1a\x1e.pipeline.ProcessModelResponse0\x01\x12B\n" +
+	"\rLocateObjects\x12\x17.pipeline.LocateRequest\x1a\x18.pipeline.LocateResponseB\x10Z\x0e./pipeline_rpcb\x06proto3"
 
 var (
 	file_pipeline_pipeline_proto_rawDescOnce sync.Once
@@ -201,19 +417,25 @@ func file_pipeline_pipeline_proto_rawDescGZIP() []byte {
 	return file_pipeline_pipeline_proto_rawDescData
 }
 
-var file_pipeline_pipeline_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
+var file_pipeline_pipeline_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
 var file_pipeline_pipeline_proto_goTypes = []any{
-	(*ProcessModelRequest)(nil),  // 0: pipeline.ProcessModelRequest
-	(*ProcessModelResponse)(nil), // 1: pipeline.ProcessModelResponse
+	(*ProcessModelRequest)(nil),        // 0: pipeline.ProcessModelRequest
+	(*ProcessModelResponse)(nil),       // 1: pipeline.ProcessModelResponse
+	(*LocateRequest)(nil),              // 2: pipeline.LocateRequest
+	(*LocateResponse)(nil),             // 3: pipeline.LocateResponse
+	(*LocateResponse_BoundingBox)(nil), // 4: pipeline.LocateResponse.BoundingBox
 }
 var file_pipeline_pipeline_proto_depIdxs = []int32{
-	0, // 0: pipeline.NtcPipelineService.ProcessModel:input_type -> pipeline.ProcessModelRequest
-	1, // 1: pipeline.NtcPipelineService.ProcessModel:output_type -> pipeline.ProcessModelResponse
-	1, // [1:2] is the sub-list for method output_type
-	0, // [0:1] is the sub-list for method input_type
-	0, // [0:0] is the sub-list for extension type_name
-	0, // [0:0] is the sub-list for extension extendee
-	0, // [0:0] is the sub-list for field type_name
+	4, // 0: pipeline.LocateResponse.detections:type_name -> pipeline.LocateResponse.BoundingBox
+	0, // 1: pipeline.NtcPipelineService.ProcessModel:input_type -> pipeline.ProcessModelRequest
+	2, // 2: pipeline.NtcPipelineService.LocateObjects:input_type -> pipeline.LocateRequest
+	1, // 3: pipeline.NtcPipelineService.ProcessModel:output_type -> pipeline.ProcessModelResponse
+	3, // 4: pipeline.NtcPipelineService.LocateObjects:output_type -> pipeline.LocateResponse
+	3, // [3:5] is the sub-list for method output_type
+	1, // [1:3] is the sub-list for method input_type
+	1, // [1:1] is the sub-list for extension type_name
+	1, // [1:1] is the sub-list for extension extendee
+	0, // [0:1] is the sub-list for field type_name
 }
 
 func init() { file_pipeline_pipeline_proto_init() }
@@ -227,7 +449,7 @@ func file_pipeline_pipeline_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_pipeline_pipeline_proto_rawDesc), len(file_pipeline_pipeline_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   2,
+			NumMessages:   5,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

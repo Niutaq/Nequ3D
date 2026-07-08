@@ -41,5 +41,7 @@ RUN ln -s /opt/RTXNTC/bin/linux-x64/ntc-cli /usr/local/bin/ntc-cli
 WORKDIR /app
 COPY . /app/
 
-# Standby execution state
-CMD ["/bin/bash"]
+RUN pip3 install -r requirements.txt
+
+# Start the gRPC server
+CMD ["python3", "-u", "rpc_server.py"]

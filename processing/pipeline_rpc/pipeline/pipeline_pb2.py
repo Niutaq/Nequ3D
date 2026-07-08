@@ -24,7 +24,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x17pipeline/pipeline.proto\x12\x08pipeline\"\\\n\x13ProcessModelRequest\x12\x15\n\rabsolute_path\x18\x01 \x01(\t\x12\x16\n\x0etarget_bitrate\x18\x02 \x01(\x05\x12\x16\n\x0etraining_steps\x18\x03 \x01(\x05\"\x95\x01\n\x14ProcessModelResponse\x12\x13\n\x0bupdate_type\x18\x01 \x01(\t\x12\x0f\n\x07message\x18\x02 \x01(\t\x12\x14\n\x0c\x63urrent_step\x18\x03 \x01(\x05\x12\x13\n\x0btotal_steps\x18\x04 \x01(\x05\x12\x14\n\x0c\x63urrent_loss\x18\x05 \x01(\x02\x12\x16\n\x0etelemetry_json\x18\x06 \x01(\t2e\n\x12NtcPipelineService\x12O\n\x0cProcessModel\x12\x1d.pipeline.ProcessModelRequest\x1a\x1e.pipeline.ProcessModelResponse0\x01\x42\x10Z\x0e./pipeline_rpcb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x17pipeline/pipeline.proto\x12\x08pipeline\"k\n\x13ProcessModelRequest\x12\x11\n\tfile_name\x18\x01 \x01(\t\x12\x11\n\tfile_data\x18\x02 \x01(\x0c\x12\x16\n\x0etarget_bitrate\x18\x03 \x01(\x05\x12\x16\n\x0etraining_steps\x18\x04 \x01(\x05\"\x95\x01\n\x14ProcessModelResponse\x12\x13\n\x0bupdate_type\x18\x01 \x01(\t\x12\x0f\n\x07message\x18\x02 \x01(\t\x12\x14\n\x0c\x63urrent_step\x18\x03 \x01(\x05\x12\x13\n\x0btotal_steps\x18\x04 \x01(\x05\x12\x14\n\x0c\x63urrent_loss\x18\x05 \x01(\x02\x12\x16\n\x0etelemetry_json\x18\x06 \x01(\t\"3\n\rLocateRequest\x12\x12\n\nimage_data\x18\x01 \x01(\x0c\x12\x0e\n\x06prompt\x18\x02 \x01(\t\"\xc5\x01\n\x0eLocateResponse\x12\x38\n\ndetections\x18\x01 \x03(\x0b\x32$.pipeline.LocateResponse.BoundingBox\x12\x0f\n\x07message\x18\x02 \x01(\t\x1ah\n\x0b\x42oundingBox\x12\x0c\n\x04xmin\x18\x01 \x01(\x02\x12\x0c\n\x04ymin\x18\x02 \x01(\x02\x12\x0c\n\x04xmax\x18\x03 \x01(\x02\x12\x0c\n\x04ymax\x18\x04 \x01(\x02\x12\r\n\x05label\x18\x05 \x01(\t\x12\x12\n\nconfidence\x18\x06 \x01(\x02\x32\xa9\x01\n\x12NtcPipelineService\x12O\n\x0cProcessModel\x12\x1d.pipeline.ProcessModelRequest\x1a\x1e.pipeline.ProcessModelResponse0\x01\x12\x42\n\rLocateObjects\x12\x17.pipeline.LocateRequest\x1a\x18.pipeline.LocateResponseB\x10Z\x0e./pipeline_rpcb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -33,9 +33,15 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['DESCRIPTOR']._loaded_options = None
   _globals['DESCRIPTOR']._serialized_options = b'Z\016./pipeline_rpc'
   _globals['_PROCESSMODELREQUEST']._serialized_start=37
-  _globals['_PROCESSMODELREQUEST']._serialized_end=129
-  _globals['_PROCESSMODELRESPONSE']._serialized_start=132
-  _globals['_PROCESSMODELRESPONSE']._serialized_end=281
-  _globals['_NTCPIPELINESERVICE']._serialized_start=283
-  _globals['_NTCPIPELINESERVICE']._serialized_end=384
+  _globals['_PROCESSMODELREQUEST']._serialized_end=144
+  _globals['_PROCESSMODELRESPONSE']._serialized_start=147
+  _globals['_PROCESSMODELRESPONSE']._serialized_end=296
+  _globals['_LOCATEREQUEST']._serialized_start=298
+  _globals['_LOCATEREQUEST']._serialized_end=349
+  _globals['_LOCATERESPONSE']._serialized_start=352
+  _globals['_LOCATERESPONSE']._serialized_end=549
+  _globals['_LOCATERESPONSE_BOUNDINGBOX']._serialized_start=445
+  _globals['_LOCATERESPONSE_BOUNDINGBOX']._serialized_end=549
+  _globals['_NTCPIPELINESERVICE']._serialized_start=552
+  _globals['_NTCPIPELINESERVICE']._serialized_end=721
 # @@protoc_insertion_point(module_scope)

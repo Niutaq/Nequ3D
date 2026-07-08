@@ -4,17 +4,19 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
-	pb "changeme/pipeline_rpc"
+	pb "changeme/pipeline_rpc/pipeline"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -375,7 +377,13 @@ func (a *App) ProcessModel(absolutePath string, bpp string, steps string) (strin
 	}
 
 	// PRODUCTION PIPELINE: gRPC Call to Python Backend
-	conn, err := grpc.NewClient("localhost:50051", grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.NewClient("localhost:50051", 
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithDefaultCallOptions(
+			grpc.MaxCallRecvMsgSize(100*1024*1024),
+			grpc.MaxCallSendMsgSize(100*1024*1024),
+		),
+	)
 	if err != nil {
 		return "", fmt.Errorf("failed to connect to gRPC server: %v", err)
 	}
@@ -386,8 +394,15 @@ func (a *App) ProcessModel(absolutePath string, bpp string, steps string) (strin
 	bppInt, _ := strconv.Atoi(bpp)
 	stepsInt, _ := strconv.Atoi(steps)
 
+	fileBytes, err := os.ReadFile(absolutePath)
+	if err != nil {
+		return "", fmt.Errorf("failed to read file: %v", err)
+	}
+	fileName := filepath.Base(absolutePath)
+
 	req := &pb.ProcessModelRequest{
-		AbsolutePath:  absolutePath,
+		FileName:      fileName,
+		FileData:      fileBytes,
 		TargetBitrate: int32(bppInt),
 		TrainingSteps: int32(stepsInt),
 	}
@@ -454,4 +469,52 @@ func (a *App) SelectFile() (string, error) {
 	}
 
 	return path, nil
+}
+
+// LocateObjects sends a snapshot and prompt to the Python Backend for object detection
+func (a *App) LocateObjects(imageBase64 string, prompt string) (string, error) {
+	conn, err := grpc.NewClient("localhost:50051", 
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithDefaultCallOptions(
+			grpc.MaxCallRecvMsgSize(100*1024*1024),
+			grpc.MaxCallSendMsgSize(100*1024*1024),
+		),
+	)
+	if err != nil {
+		return "", fmt.Errorf("failed to connect to gRPC server: %v", err)
+	}
+	defer conn.Close()
+
+	client := pb.NewNtcPipelineServiceClient(conn)
+
+	// Remove data:image/png;base64, prefix if present
+	idx := strings.Index(imageBase64, ",")
+	if idx != -1 {
+		imageBase64 = imageBase64[idx+1:]
+	}
+
+	imageData, err := base64.StdEncoding.DecodeString(imageBase64)
+	if err != nil {
+		return "", fmt.Errorf("failed to decode image base64: %v", err)
+	}
+
+	req := &pb.LocateRequest{
+		ImageData: imageData,
+		Prompt:    prompt,
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	resp, err := client.LocateObjects(ctx, req)
+	if err != nil {
+		return "", fmt.Errorf("gRPC LocateObjects failed: %v", err)
+	}
+
+	jsonResp, err := json.Marshal(resp)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal response: %v", err)
+	}
+
+	return string(jsonResp), nil
 }
