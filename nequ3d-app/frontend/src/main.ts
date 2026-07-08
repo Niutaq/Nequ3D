@@ -520,6 +520,7 @@ function attachEventListeners(): void {
     updateViewerOrientations();
   });
 
+
   getEl<HTMLInputElement>("bpp-slider").addEventListener("input", (event) => {
     currentBpp = (event.target as HTMLInputElement).value;
     updateBppLabel();
