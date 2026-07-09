@@ -1,0 +1,14 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "nequ3d-core.fullname" . }}
+  labels:
+    app: {{ include "nequ3d-core.fullname" . }}
+    release: kube-prometheus-stack
+spec:
+  selector:
+    matchLabels:
+      app: {{ include "nequ3d-core.fullname" . }}
+  endpoints:
+    - port: metrics
+      path: /metrics

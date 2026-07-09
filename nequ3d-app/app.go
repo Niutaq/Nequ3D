@@ -148,7 +148,10 @@ JSON DATA:
 		Model:   model,
 		Prompt:  prompt,
 		Stream:  true, // Switched to streaming
-		Options: map[string]any{"num_ctx": 16384},
+		Options: map[string]any{
+			"num_ctx": 16384,
+			"temperature": 0.0,
+		},
 	}
 
 	if imageBase64 != "" {
