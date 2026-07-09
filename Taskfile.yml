@@ -34,21 +34,19 @@ tasks:
   dev:
     desc: Prepares everything and starts the dev server (builds core, generates proto, runs app)
     cmds:
-      - task: proto
-      - task: build-core
-      - task: build-locate
+      - task: run-core
       - task: dev-app
 
-  build-locate:
-    desc: Builds the Docker image for the LocateAnything microservice
-    dir: ml-services/locate-anything
-    cmds:
-      - docker build -t nequ3d-locate:latest .
+  # build-locate:
+  #   desc: Builds the Docker image for the LocateAnything microservice
+  #   dir: ml-services/locate-anything
+  #   cmds:
+  #     - docker build -t nequ3d-locate:latest .
 
-  run-locate:
-    desc: Runs the LocateAnything microservice using Docker (Requires GPU)
-    cmds:
-      - docker run --rm --gpus all -v "{{.ROOT_DIR}}/data/hf_cache:/root/.cache/huggingface" -p 8000:8000 nequ3d-locate:latest
+  # run-locate:
+  #   desc: Runs the LocateAnything microservice using Docker (Requires GPU)
+  #   cmds:
+  #     - docker run --rm --gpus all -v "{{.ROOT_DIR}}/data/hf_cache:/root/.cache/huggingface" -p 8000:8000 nequ3d-locate:latest
 
   gitops-install:
     desc: Installs ArgoCD to the active Kubernetes cluster
@@ -78,12 +76,15 @@ tasks:
       - echo "Open https://localhost:8080 in your browser. Username is 'admin'."
       - kubectl port-forward svc/argocd-server -n argocd 8080:443
 
-  start-services:
-    internal: true
-    deps: [run-core, run-locate, dev]
+  monitoring-ui:
+    desc: Port-forwards the Grafana UI to localhost:3000 (CTRL+C to stop)
+    cmds:
+      - echo "Open http://localhost:3000 in your browser. Default login is usually admin / prom-operator."
+      - kubectl port-forward svc/kube-prometheus-stack-grafana -n monitoring 3000:80
 
   run-all:
-    desc: Generates ProtoBufs and starts both the Python Core and Wails App concurrently
+    desc: Builds Core, generates ProtoBufs and starts Wails App
     cmds:
       - task: proto
-      - task: start-services
+      - task: build-core
+      - task: dev-app

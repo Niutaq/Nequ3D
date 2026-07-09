@@ -100,6 +100,7 @@ type ProcessModelResponse struct {
 	CurrentLoss float32 `protobuf:"fixed32,5,opt,name=current_loss,json=currentLoss,proto3" json:"current_loss,omitempty"`
 	// Used when update_type == "result"
 	TelemetryJson string `protobuf:"bytes,6,opt,name=telemetry_json,json=telemetryJson,proto3" json:"telemetry_json,omitempty"`
+	ProxyGlbData  []byte `protobuf:"bytes,7,opt,name=proxy_glb_data,json=proxyGlbData,proto3" json:"proxy_glb_data,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -174,6 +175,13 @@ func (x *ProcessModelResponse) GetTelemetryJson() string {
 		return x.TelemetryJson
 	}
 	return ""
+}
+
+func (x *ProcessModelResponse) GetProxyGlbData() []byte {
+	if x != nil {
+		return x.ProxyGlbData
+	}
+	return nil
 }
 
 type LocateRequest struct {
@@ -373,7 +381,7 @@ const file_pipeline_pipeline_proto_rawDesc = "" +
 	"\tfile_name\x18\x01 \x01(\tR\bfileName\x12\x1b\n" +
 	"\tfile_data\x18\x02 \x01(\fR\bfileData\x12%\n" +
 	"\x0etarget_bitrate\x18\x03 \x01(\x05R\rtargetBitrate\x12%\n" +
-	"\x0etraining_steps\x18\x04 \x01(\x05R\rtrainingSteps\"\xdf\x01\n" +
+	"\x0etraining_steps\x18\x04 \x01(\x05R\rtrainingSteps\"\x85\x02\n" +
 	"\x14ProcessModelResponse\x12\x1f\n" +
 	"\vupdate_type\x18\x01 \x01(\tR\n" +
 	"updateType\x12\x18\n" +
@@ -382,7 +390,8 @@ const file_pipeline_pipeline_proto_rawDesc = "" +
 	"\vtotal_steps\x18\x04 \x01(\x05R\n" +
 	"totalSteps\x12!\n" +
 	"\fcurrent_loss\x18\x05 \x01(\x02R\vcurrentLoss\x12%\n" +
-	"\x0etelemetry_json\x18\x06 \x01(\tR\rtelemetryJson\"F\n" +
+	"\x0etelemetry_json\x18\x06 \x01(\tR\rtelemetryJson\x12$\n" +
+	"\x0eproxy_glb_data\x18\a \x01(\fR\fproxyGlbData\"F\n" +
 	"\rLocateRequest\x12\x1d\n" +
 	"\n" +
 	"image_data\x18\x01 \x01(\fR\timageData\x12\x16\n" +

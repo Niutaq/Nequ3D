@@ -103,10 +103,21 @@ class NtcPipelineService(pipeline_pb2_grpc.NtcPipelineServiceServicer):
 
             if telemetry_json:
                 logger.info("Processing finished successfully")
+                proxy_glb_data = b""
+                try:
+                    telemetry_dict = json.loads(telemetry_json)
+                    proxy_path = telemetry_dict.get("proxy_glb_path")
+                    if proxy_path and os.path.exists(proxy_path):
+                        with open(proxy_path, "rb") as f:
+                            proxy_glb_data = f.read()
+                except Exception as e:
+                    logger.error(f"Failed to load proxy GLB: {e}")
+
                 yield pipeline_pb2.ProcessModelResponse(
                     update_type="result",
                     message="Finished successfully.",
                     telemetry_json=telemetry_json,
+                    proxy_glb_data=proxy_glb_data,
                 )
                 PROCESSED_MODELS.inc()
             else:

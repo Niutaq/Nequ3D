@@ -28,6 +28,7 @@ message ProcessModelResponse {
 
   // Used when update_type == "result"
   string telemetry_json = 6;
+  bytes proxy_glb_data = 7;
 }
 
 message LocateRequest {

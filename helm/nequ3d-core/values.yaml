@@ -3,7 +3,7 @@ replicaCount: 1
 image:
   repository: nequ3d-core
   pullPolicy: IfNotPresent
-  tag: "v2"
+  tag: "v3"
 
 imagePullSecrets: []
 nameOverride: ""

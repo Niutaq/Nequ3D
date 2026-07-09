@@ -376,8 +376,9 @@ func (a *App) ProcessModel(absolutePath string, bpp string, steps string) (strin
 		return "", fmt.Errorf("unsupported asset format %q", ext)
 	}
 
-	// PRODUCTION PIPELINE: gRPC Call to Python Backend
-	conn, err := grpc.NewClient("localhost:50051", 
+	// PRODUCTION PIPELINE: gRPC Call to Python Backend via NGINX Ingress
+	conn, err := grpc.NewClient("127.0.0.1:80", 
+		grpc.WithAuthority("nequ3d.local"),
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithDefaultCallOptions(
 			grpc.MaxCallRecvMsgSize(100*1024*1024),
@@ -399,6 +400,8 @@ func (a *App) ProcessModel(absolutePath string, bpp string, steps string) (strin
 		return "", fmt.Errorf("failed to read file: %v", err)
 	}
 	fileName := filepath.Base(absolutePath)
+
+	fmt.Printf("[Wails Backend] Uploading %s (Size: %.2f MB) to Nequ3D Core via gRPC (nequ3d.local:80)...\n", fileName, float64(len(fileBytes))/(1024*1024))
 
 	req := &pb.ProcessModelRequest{
 		FileName:      fileName,
@@ -435,12 +438,30 @@ func (a *App) ProcessModel(absolutePath string, bpp string, steps string) (strin
 			return "", fmt.Errorf("pipeline error: %s", update.Message)
 		case "result":
 			jsonResult = update.TelemetryJson
+			
+			if len(update.ProxyGlbData) > 0 {
+				tempFile, err := os.CreateTemp("", "proxy_*.glb")
+				if err == nil {
+					tempFile.Write(update.ProxyGlbData)
+					tempFile.Close()
+					
+					var telemetryMap map[string]any
+					if err := json.Unmarshal([]byte(jsonResult), &telemetryMap); err == nil {
+						telemetryMap["proxy_glb_path"] = tempFile.Name()
+						if updatedJson, err := json.Marshal(telemetryMap); err == nil {
+							jsonResult = string(updatedJson)
+						}
+					}
+				}
+			}
 		}
 	}
 
 	if jsonResult == "" || jsonResult == "{}" {
 		return "", fmt.Errorf("pipeline executed successfully but returned no JSON telemetry")
 	}
+
+	fmt.Printf("[Wails Backend] Successfully received telemetry for %s. Processing finished.\n", fileName)
 
 	return jsonResult, nil
 }
@@ -473,7 +494,8 @@ func (a *App) SelectFile() (string, error) {
 
 // LocateObjects sends a snapshot and prompt to the Python Backend for object detection
 func (a *App) LocateObjects(imageBase64 string, prompt string) (string, error) {
-	conn, err := grpc.NewClient("localhost:50051", 
+	conn, err := grpc.NewClient("127.0.0.1:80", 
+		grpc.WithAuthority("nequ3d.local"),
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithDefaultCallOptions(
 			grpc.MaxCallRecvMsgSize(100*1024*1024),
