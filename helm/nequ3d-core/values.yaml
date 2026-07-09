@@ -50,6 +50,7 @@ ingress:
   className: "nginx"
   annotations:
     nginx.ingress.kubernetes.io/backend-protocol: "GRPC"
+    nginx.ingress.kubernetes.io/proxy-body-size: "100m"
   hosts:
     - host: "nequ3d.local"
       paths:
