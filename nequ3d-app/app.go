@@ -181,13 +181,31 @@ JSON DATA:
 
 	scanner := bufio.NewScanner(resp.Body)
 	var fullResponse strings.Builder
+	var started bool
 
 	for scanner.Scan() {
 		line := scanner.Bytes()
 		var ollamaResp OllamaResponse
 		if err := json.Unmarshal(line, &ollamaResp); err == nil {
-			fullResponse.WriteString(ollamaResp.Response)
-			application.Get().Event.Emit("llmToken", ollamaResp.Response)
+			token := ollamaResp.Response
+			
+			if !started {
+				fullResponse.WriteString(token)
+				currentStr := fullResponse.String()
+				// Trim leading garbage (allow letters, numbers, dash, asterisk)
+				trimmed := strings.TrimLeftFunc(currentStr, func(r rune) bool {
+					return r != '-' && r != '*' && (r < 'A' || r > 'Z') && (r < 'a' || r > 'z') && (r < '0' || r > '9')
+				})
+				if len(trimmed) > 0 {
+					started = true
+					fullResponse.Reset()
+					fullResponse.WriteString(trimmed)
+					application.Get().Event.Emit("llmToken", trimmed)
+				}
+			} else {
+				fullResponse.WriteString(token)
+				application.Get().Event.Emit("llmToken", token)
+			}
 		}
 	}
 
