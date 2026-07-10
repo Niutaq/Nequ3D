@@ -31,14 +31,7 @@ service:
   type: ClusterIP
   port: 50051 # Assuming gRPC port
 
-resources:
-  limits:
-    nvidia.com/gpu: 1
-    # cpu: 100m
-    # memory: 128Mi
-  # requests:
-  #   cpu: 100m
-  #   memory: 128Mi
+resources: {}
 
 nodeSelector: {}
 
