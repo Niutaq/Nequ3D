@@ -6,21 +6,18 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: 'https://charts.bitnami.com/bitnami'
+    repoURL: 'https://charts.min.io/'
     chart: minio
+    targetRevision: 5.4.0
     helm:
       values: |
-        image:
-          tag: latest
-        defaultBuckets: "raw-scans, processed-models"
-        ingress:
-          enabled: true
-          ingressClassName: "nginx"
-          hostname: minio.local
-        apiIngress:
-          enabled: true
-          ingressClassName: "nginx"
-          hostname: s3.minio.local
+        rootUser: admin
+        rootPassword: Nequ3dSecureStore2026!
+        buckets:
+          - name: raw-scans
+            policy: public
+          - name: processed-models
+            policy: public
   destination:
     server: 'https://kubernetes.default.svc'
     namespace: minio
