@@ -11,6 +11,8 @@ spec:
     targetRevision: 5.4.0
     helm:
       values: |
+        mode: standalone
+        replicas: 1
         rootUser: admin
         rootPassword: Nequ3dSecureStore2026!
         buckets:
