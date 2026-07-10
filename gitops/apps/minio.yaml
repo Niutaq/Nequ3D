@@ -1,0 +1,33 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: minio
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: 'https://charts.bitnami.com/bitnami'
+    chart: minio
+    targetRevision: 14.7.3
+    helm:
+      values: |
+        auth:
+          existingSecret: "minio-auth-secret"
+        defaultBuckets: "raw-scans, processed-models"
+        ingress:
+          enabled: true
+          ingressClassName: "nginx"
+          hostname: minio.local
+        apiIngress:
+          enabled: true
+          ingressClassName: "nginx"
+          hostname: s3.minio.local
+  destination:
+    server: 'https://kubernetes.default.svc'
+    namespace: minio
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
