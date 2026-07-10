@@ -417,7 +417,7 @@ func (a *App) ProcessModel(absolutePath string, bpp string, steps string) (strin
 	fileName := filepath.Base(absolutePath)
 	
 	// Upload file to MinIO
-	minioClient, err := minio.New("s3.minio.local", &minio.Options{
+	minioClient, err := minio.New("127.0.0.1:9000", &minio.Options{
 		Creds:  credentials.NewStaticV4("admin", "Nequ3dSecureStore2026!", ""),
 		Secure: false,
 	})

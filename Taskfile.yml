@@ -56,6 +56,11 @@ tasks:
       - echo "Waiting for ArgoCD server to be ready..."
       - kubectl wait --for=condition=available deployment/argocd-server -n argocd --timeout=300s
 
+  minio-proxy:
+    desc: Port-forwards MinIO to localhost for local Wails development
+    cmds:
+      - kubectl port-forward svc/minio 9000:9000 -n minio
+
   gitops-apply:
     desc: Deploys the Nequ3D Core application via ArgoCD (GitOps)
     cmds:
