@@ -24,7 +24,7 @@ const (
 type ProcessModelRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	FileName      string                 `protobuf:"bytes,1,opt,name=file_name,json=fileName,proto3" json:"file_name,omitempty"`
-	FileData      []byte                 `protobuf:"bytes,2,opt,name=file_data,json=fileData,proto3" json:"file_data,omitempty"`
+	S3ObjectKey   string                 `protobuf:"bytes,2,opt,name=s3_object_key,json=s3ObjectKey,proto3" json:"s3_object_key,omitempty"`
 	TargetBitrate int32                  `protobuf:"varint,3,opt,name=target_bitrate,json=targetBitrate,proto3" json:"target_bitrate,omitempty"`
 	TrainingSteps int32                  `protobuf:"varint,4,opt,name=training_steps,json=trainingSteps,proto3" json:"training_steps,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -68,11 +68,11 @@ func (x *ProcessModelRequest) GetFileName() string {
 	return ""
 }
 
-func (x *ProcessModelRequest) GetFileData() []byte {
+func (x *ProcessModelRequest) GetS3ObjectKey() string {
 	if x != nil {
-		return x.FileData
+		return x.S3ObjectKey
 	}
-	return nil
+	return ""
 }
 
 func (x *ProcessModelRequest) GetTargetBitrate() int32 {
@@ -100,7 +100,7 @@ type ProcessModelResponse struct {
 	CurrentLoss float32 `protobuf:"fixed32,5,opt,name=current_loss,json=currentLoss,proto3" json:"current_loss,omitempty"`
 	// Used when update_type == "result"
 	TelemetryJson string `protobuf:"bytes,6,opt,name=telemetry_json,json=telemetryJson,proto3" json:"telemetry_json,omitempty"`
-	ProxyGlbData  []byte `protobuf:"bytes,7,opt,name=proxy_glb_data,json=proxyGlbData,proto3" json:"proxy_glb_data,omitempty"`
+	ProxyGlbS3Key string `protobuf:"bytes,7,opt,name=proxy_glb_s3_key,json=proxyGlbS3Key,proto3" json:"proxy_glb_s3_key,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -177,11 +177,11 @@ func (x *ProcessModelResponse) GetTelemetryJson() string {
 	return ""
 }
 
-func (x *ProcessModelResponse) GetProxyGlbData() []byte {
+func (x *ProcessModelResponse) GetProxyGlbS3Key() string {
 	if x != nil {
-		return x.ProxyGlbData
+		return x.ProxyGlbS3Key
 	}
-	return nil
+	return ""
 }
 
 type LocateRequest struct {
@@ -376,12 +376,12 @@ var File_pipeline_pipeline_proto protoreflect.FileDescriptor
 
 const file_pipeline_pipeline_proto_rawDesc = "" +
 	"\n" +
-	"\x17pipeline/pipeline.proto\x12\bpipeline\"\x9d\x01\n" +
+	"\x17pipeline/pipeline.proto\x12\bpipeline\"\xa4\x01\n" +
 	"\x13ProcessModelRequest\x12\x1b\n" +
-	"\tfile_name\x18\x01 \x01(\tR\bfileName\x12\x1b\n" +
-	"\tfile_data\x18\x02 \x01(\fR\bfileData\x12%\n" +
+	"\tfile_name\x18\x01 \x01(\tR\bfileName\x12\"\n" +
+	"\rs3_object_key\x18\x02 \x01(\tR\vs3ObjectKey\x12%\n" +
 	"\x0etarget_bitrate\x18\x03 \x01(\x05R\rtargetBitrate\x12%\n" +
-	"\x0etraining_steps\x18\x04 \x01(\x05R\rtrainingSteps\"\x85\x02\n" +
+	"\x0etraining_steps\x18\x04 \x01(\x05R\rtrainingSteps\"\x88\x02\n" +
 	"\x14ProcessModelResponse\x12\x1f\n" +
 	"\vupdate_type\x18\x01 \x01(\tR\n" +
 	"updateType\x12\x18\n" +
@@ -390,8 +390,8 @@ const file_pipeline_pipeline_proto_rawDesc = "" +
 	"\vtotal_steps\x18\x04 \x01(\x05R\n" +
 	"totalSteps\x12!\n" +
 	"\fcurrent_loss\x18\x05 \x01(\x02R\vcurrentLoss\x12%\n" +
-	"\x0etelemetry_json\x18\x06 \x01(\tR\rtelemetryJson\x12$\n" +
-	"\x0eproxy_glb_data\x18\a \x01(\fR\fproxyGlbData\"F\n" +
+	"\x0etelemetry_json\x18\x06 \x01(\tR\rtelemetryJson\x12'\n" +
+	"\x10proxy_glb_s3_key\x18\a \x01(\tR\rproxyGlbS3Key\"F\n" +
 	"\rLocateRequest\x12\x1d\n" +
 	"\n" +
 	"image_data\x18\x01 \x01(\fR\timageData\x12\x16\n" +

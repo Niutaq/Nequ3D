@@ -16,6 +16,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/minio/minio-go/v7"
+	"github.com/minio/minio-go/v7/pkg/credentials"
 	pb "changeme/pipeline_rpc/pipeline"
 
 	"google.golang.org/grpc"
@@ -270,12 +272,8 @@ func sanitizeOllamaModel(model string) string {
 }
 
 func timeoutForModel(model string) time.Duration {
-	switch model {
-	case "llama3", "llama3:8b", "mistral", "mistral:7b":
-		return 6 * time.Minute
-	default:
-		return 2 * time.Minute
-	}
+	// Increased timeout to 15 minutes for all models to prevent context deadline exceeded
+	return 15 * time.Minute
 }
 
 func trimForError(body []byte) string {
@@ -416,17 +414,32 @@ func (a *App) ProcessModel(absolutePath string, bpp string, steps string) (strin
 	bppInt, _ := strconv.Atoi(bpp)
 	stepsInt, _ := strconv.Atoi(steps)
 
-	fileBytes, err := os.ReadFile(absolutePath)
-	if err != nil {
-		return "", fmt.Errorf("failed to read file: %v", err)
-	}
 	fileName := filepath.Base(absolutePath)
+	
+	// Upload file to MinIO
+	minioClient, err := minio.New("s3.minio.local", &minio.Options{
+		Creds:  credentials.NewStaticV4("admin", "Nequ3dSecureStore2026!", ""),
+		Secure: false,
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to init MinIO client: %v", err)
+	}
 
-	fmt.Printf("[Wails Backend] Uploading %s (Size: %.2f MB) to Nequ3D Core via gRPC (nequ3d.local:80)...\n", fileName, float64(len(fileBytes))/(1024*1024))
+	bucketName := "raw-scans"
+	objectKey := fmt.Sprintf("%d-%s", time.Now().Unix(), fileName)
+	
+	fmt.Printf("[Wails Backend] Uploading %s to MinIO (bucket: %s, key: %s)...\n", fileName, bucketName, objectKey)
+	_, err = minioClient.FPutObject(context.Background(), bucketName, objectKey, absolutePath, minio.PutObjectOptions{})
+	if err != nil {
+		return "", fmt.Errorf("failed to upload to MinIO: %v", err)
+	}
+	fmt.Printf("[Wails Backend] Upload to MinIO complete!\n")
+
+	fmt.Printf("[Wails Backend] Sending S3 Object Key %s to Nequ3D Core via gRPC (nequ3d.local:80)...\n", objectKey)
 
 	req := &pb.ProcessModelRequest{
 		FileName:      fileName,
-		FileData:      fileBytes,
+		S3ObjectKey:   objectKey,
 		TargetBitrate: int32(bppInt),
 		TrainingSteps: int32(stepsInt),
 	}
@@ -460,18 +473,21 @@ func (a *App) ProcessModel(absolutePath string, bpp string, steps string) (strin
 		case "result":
 			jsonResult = update.TelemetryJson
 			
-			if len(update.ProxyGlbData) > 0 {
+			if update.ProxyGlbS3Key != "" {
 				tempFile, err := os.CreateTemp("", "proxy_*.glb")
 				if err == nil {
-					tempFile.Write(update.ProxyGlbData)
-					tempFile.Close()
-					
-					var telemetryMap map[string]any
-					if err := json.Unmarshal([]byte(jsonResult), &telemetryMap); err == nil {
-						telemetryMap["proxy_glb_path"] = tempFile.Name()
-						if updatedJson, err := json.Marshal(telemetryMap); err == nil {
-							jsonResult = string(updatedJson)
+					tempFile.Close() // Close it so MinIO can write to it via FGetObject
+					err = minioClient.FGetObject(context.Background(), "processed-models", update.ProxyGlbS3Key, tempFile.Name(), minio.GetObjectOptions{})
+					if err == nil {
+						var telemetryMap map[string]any
+						if err := json.Unmarshal([]byte(jsonResult), &telemetryMap); err == nil {
+							telemetryMap["proxy_glb_path"] = tempFile.Name()
+							if updatedJson, err := json.Marshal(telemetryMap); err == nil {
+								jsonResult = string(updatedJson)
+							}
 						}
+					} else {
+						fmt.Printf("[Wails Backend] Warning: failed to download proxy GLB from MinIO: %v\n", err)
 					}
 				}
 			}

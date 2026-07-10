@@ -6,10 +6,19 @@ import sys
 import time
 from concurrent import futures
 
+import boto3
 import grpc
 import requests
 from prometheus_client import Gauge, start_http_server
 from pythonjsonlogger import jsonlogger
+
+s3_client = boto3.client(
+    's3',
+    endpoint_url='http://minio.minio.svc.cluster.local:9000',
+    aws_access_key_id='admin',
+    aws_secret_access_key='Nequ3dSecureStore2026!',
+    region_name='us-east-1'
+)
 
 # Initialize structured JSON logging
 logger = logging.getLogger("nequ3d_core")
@@ -51,8 +60,8 @@ class NtcPipelineService(pipeline_pb2_grpc.NtcPipelineServiceServicer):
         os.makedirs(model_dir, exist_ok=True)
         file_path = os.path.join(model_dir, request.file_name)
         
-        with open(file_path, "wb") as f:
-            f.write(request.file_data)
+        logger.info(f"Downloading {request.s3_object_key} from MinIO to {file_path}")
+        s3_client.download_file("raw-scans", request.s3_object_key, file_path)
 
         cmd = [
             "python3",
@@ -103,21 +112,22 @@ class NtcPipelineService(pipeline_pb2_grpc.NtcPipelineServiceServicer):
 
             if telemetry_json:
                 logger.info("Processing finished successfully")
-                proxy_glb_data = b""
+                proxy_glb_s3_key = ""
                 try:
                     telemetry_dict = json.loads(telemetry_json)
                     proxy_path = telemetry_dict.get("proxy_glb_path")
                     if proxy_path and os.path.exists(proxy_path):
-                        with open(proxy_path, "rb") as f:
-                            proxy_glb_data = f.read()
+                        proxy_glb_s3_key = f"proxy_{int(time.time())}_{os.path.basename(proxy_path)}"
+                        logger.info(f"Uploading {proxy_path} to MinIO as {proxy_glb_s3_key}")
+                        s3_client.upload_file(proxy_path, "processed-models", proxy_glb_s3_key)
                 except Exception as e:
-                    logger.error(f"Failed to load proxy GLB: {e}")
+                    logger.error(f"Failed to upload proxy GLB to MinIO: {e}")
 
                 yield pipeline_pb2.ProcessModelResponse(
                     update_type="result",
                     message="Finished successfully.",
                     telemetry_json=telemetry_json,
-                    proxy_glb_data=proxy_glb_data,
+                    proxy_glb_s3_key=proxy_glb_s3_key,
                 )
                 PROCESSED_MODELS.inc()
             else:

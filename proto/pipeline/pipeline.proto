@@ -11,7 +11,7 @@ service NtcPipelineService {
 
 message ProcessModelRequest {
   string file_name = 1;
-  bytes file_data = 2;
+  string s3_object_key = 2;
   int32 target_bitrate = 3;
   int32 training_steps = 4;
 }
@@ -28,7 +28,7 @@ message ProcessModelResponse {
 
   // Used when update_type == "result"
   string telemetry_json = 6;
-  bytes proxy_glb_data = 7;
+  string proxy_glb_s3_key = 7;
 }
 
 message LocateRequest {

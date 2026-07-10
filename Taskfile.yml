@@ -13,7 +13,7 @@ tasks:
     desc: Builds the Docker image for the processing core
     dir: processing
     cmds:
-      - docker build -t nequ3d-core:latest .
+      - docker build -t nequ3d-core:v4 .
 
   run-core:
     desc: Starts the Python gRPC server locally (Requires a separate terminal!)
