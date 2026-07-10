@@ -8,11 +8,10 @@ spec:
   source:
     repoURL: 'https://charts.bitnami.com/bitnami'
     chart: minio
-    targetRevision: 14.7.3
     helm:
       values: |
-        auth:
-          existingSecret: "minio-auth-secret"
+        image:
+          tag: latest
         defaultBuckets: "raw-scans, processed-models"
         ingress:
           enabled: true
