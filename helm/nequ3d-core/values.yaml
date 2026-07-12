@@ -32,8 +32,8 @@ service:
   port: 50051 # Assuming gRPC port
 
 resources:
-  limits:
-    nvidia.com/gpu: 1
+  limits: {}
+    # nvidia.com/gpu: 1
 
 nodeSelector: {}
 
