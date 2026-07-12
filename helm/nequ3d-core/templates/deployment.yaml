@@ -22,6 +22,10 @@ spec:
           env:
             - name: MINIO_ENDPOINT
               value: "http://minio.minio.svc.cluster.local:9000"
+            - name: NVIDIA_VISIBLE_DEVICES
+              value: "all"
+            - name: NVIDIA_DRIVER_CAPABILITIES
+              value: "all"
           ports:
             - name: grpc
               containerPort: 50051
