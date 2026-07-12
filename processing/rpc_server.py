@@ -12,9 +12,11 @@ import requests
 from prometheus_client import Gauge, start_http_server
 from pythonjsonlogger import jsonlogger
 
+minio_endpoint = os.environ.get('MINIO_ENDPOINT', 'http://127.0.0.1:9000')
+
 s3_client = boto3.client(
     's3',
-    endpoint_url='http://minio.minio.svc.cluster.local:9000',
+    endpoint_url=minio_endpoint,
     aws_access_key_id='admin',
     aws_secret_access_key='Nequ3dSecureStore2026!',
     region_name='us-east-1'
@@ -64,9 +66,9 @@ class NtcPipelineService(pipeline_pb2_grpc.NtcPipelineServiceServicer):
         s3_client.download_file("raw-scans", request.s3_object_key, file_path)
 
         cmd = [
-            "python3",
+            sys.executable,
             "-u",
-            "/app/process_usd_file.py",
+            "process_usd_file.py",
             file_path,
             str(request.target_bitrate),
             str(request.training_steps),

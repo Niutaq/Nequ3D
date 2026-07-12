@@ -19,6 +19,9 @@ spec:
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           command: ["python3", "-u", "rpc_server.py"]
+          env:
+            - name: MINIO_ENDPOINT
+              value: "http://minio.minio.svc.cluster.local:9000"
           ports:
             - name: grpc
               containerPort: 50051

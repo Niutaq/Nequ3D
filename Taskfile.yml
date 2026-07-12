@@ -19,10 +19,8 @@ tasks:
     desc: Starts the Python gRPC server locally (Requires a separate terminal!)
     dir: processing
     cmds:
-      - cmd: ./venv/Scripts/python rpc_server.py
-        platforms: [windows]
-      - cmd: ./venv/bin/python rpc_server.py
-        platforms: [linux, darwin]
+      - cmd: docker run --rm --gpus all -e MINIO_ENDPOINT="http://host.docker.internal:9000" -p 50051:50051 -p 8001:8001 nequ3d-core:v4
+        platforms: [windows, linux, darwin]
 
   dev-app:
     desc: Generates Wails bindings and starts the Wails dev server
