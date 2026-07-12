@@ -395,9 +395,8 @@ func (a *App) ProcessModel(absolutePath string, bpp string, steps string) (strin
 		return "", fmt.Errorf("unsupported asset format %q", ext)
 	}
 
-	// PRODUCTION PIPELINE: gRPC Call to Python Backend via NGINX Ingress
-	conn, err := grpc.NewClient("127.0.0.1:80", 
-		grpc.WithAuthority("nequ3d.local"),
+	// Connect to Python gRPC server via Ingress
+	conn, err := grpc.NewClient("nequ3d.local:80", 
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithDefaultCallOptions(
 			grpc.MaxCallRecvMsgSize(100*1024*1024),
@@ -426,6 +425,26 @@ func (a *App) ProcessModel(absolutePath string, bpp string, steps string) (strin
 	}
 
 	bucketName := "raw-scans"
+	exists, errBucket := minioClient.BucketExists(context.Background(), bucketName)
+	if errBucket == nil && !exists {
+		err = minioClient.MakeBucket(context.Background(), bucketName, minio.MakeBucketOptions{})
+		if err != nil {
+			fmt.Printf("[Wails Backend] Warning: could not create bucket %s: %v\n", bucketName, err)
+		} else {
+			fmt.Printf("[Wails Backend] Created bucket %s\n", bucketName)
+		}
+	}
+
+	exists, errBucket = minioClient.BucketExists(context.Background(), "processed-models")
+	if errBucket == nil && !exists {
+		err = minioClient.MakeBucket(context.Background(), "processed-models", minio.MakeBucketOptions{})
+		if err != nil {
+			fmt.Printf("[Wails Backend] Warning: could not create bucket processed-models: %v\n", err)
+		} else {
+			fmt.Printf("[Wails Backend] Created bucket processed-models\n")
+		}
+	}
+
 	objectKey := fmt.Sprintf("%d-%s", time.Now().Unix(), fileName)
 	
 	fmt.Printf("[Wails Backend] Uploading %s to MinIO (bucket: %s, key: %s)...\n", fileName, bucketName, objectKey)
@@ -435,7 +454,7 @@ func (a *App) ProcessModel(absolutePath string, bpp string, steps string) (strin
 	}
 	fmt.Printf("[Wails Backend] Upload to MinIO complete!\n")
 
-	fmt.Printf("[Wails Backend] Sending S3 Object Key %s to Nequ3D Core via gRPC (nequ3d.local:80)...\n", objectKey)
+
 
 	req := &pb.ProcessModelRequest{
 		FileName:      fileName,
@@ -531,8 +550,7 @@ func (a *App) SelectFile() (string, error) {
 
 // LocateObjects sends a snapshot and prompt to the Python Backend for object detection
 func (a *App) LocateObjects(imageBase64 string, prompt string) (string, error) {
-	conn, err := grpc.NewClient("127.0.0.1:80", 
-		grpc.WithAuthority("nequ3d.local"),
+	conn, err := grpc.NewClient("nequ3d.local:80", 
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithDefaultCallOptions(
 			grpc.MaxCallRecvMsgSize(100*1024*1024),
