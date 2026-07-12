@@ -224,6 +224,28 @@ wails3 generate bindings && wails3 dev
 
 ---
 
+# Infrastructure & Access
+
+## Standard Service Ports
+The following standard ports are used by the Kubernetes cluster components. You can access these services locally using the port-forwarding commands defined in the `Taskfile.yml` (these ports remain static unless modified in the configuration):
+
+* **Prometheus UI**: `9090` (`kubectl port-forward -n monitoring svc/kube-prometheus-stack-prometheus 9090:9090`)
+* **Grafana UI**: `3000` (`task monitoring-ui`)
+* **ArgoCD UI**: `8080` (`task gitops-ui`)
+* **MinIO API**: `9000` (`task minio-proxy`)
+* **MinIO Console**: `9001` (`kubectl port-forward svc/minio -n minio 9001:9001`)
+* **Wails Frontend Dev**: `9245`
+
+## GitOps & Security (MinIO Credentials)
+For local testing and development, credentials (like the MinIO root user and password) are stored in plaintext within files such as `gitops/apps/minio.yaml` or `minio-standalone.yaml`. **This is a known practice for local sandboxes but is highly insecure and constitutes a data leak risk in production.**
+
+To securely configure your own instance without leaking data:
+1. **Never commit raw passwords to the repository.**
+2. Retrieve auto-generated cluster secrets when available (e.g., run `task gitops-password` to fetch the auto-generated initial ArgoCD admin password directly from Kubernetes).
+3. For applications like MinIO, implement **Sealed Secrets** (by Bitnami), **SOPS**, or an **External Secrets Operator** (e.g., HashiCorp Vault) to encrypt your secrets before they enter the Git repository.
+
+---
+
 # Future Roadmap
 
 * Distributed processing workers
