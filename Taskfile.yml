@@ -85,6 +85,18 @@ tasks:
       - echo "Open http://localhost:3000 in your browser. Default login is usually admin / prom-operator."
       - kubectl port-forward svc/kube-prometheus-stack-grafana -n monitoring 3000:80
 
+  prometheus-ui:
+    desc: Port-forwards the Prometheus UI to localhost:9090 (CTRL+C to stop)
+    cmds:
+      - echo "Open http://localhost:9090 in your browser."
+      - kubectl port-forward -n monitoring svc/kube-prometheus-stack-prometheus 9090:9090
+
+  minio-console:
+    desc: Port-forwards the MinIO Web Console to localhost:9001 (CTRL+C to stop)
+    cmds:
+      - echo "Open http://localhost:9001 in your browser. Login using credentials from minio-standalone.yaml"
+      - kubectl port-forward svc/minio -n minio 9001:9001
+
   run-all:
     desc: Builds Core, generates ProtoBufs and starts Wails App
     cmds:

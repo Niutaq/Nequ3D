@@ -229,11 +229,11 @@ wails3 generate bindings && wails3 dev
 ## Standard Service Ports
 The following standard ports are used by the Kubernetes cluster components. You can access these services locally using the port-forwarding commands defined in the `Taskfile.yml` (these ports remain static unless modified in the configuration):
 
-* **Prometheus UI**: `9090` (`kubectl port-forward -n monitoring svc/kube-prometheus-stack-prometheus 9090:9090`)
+* **Prometheus UI**: `9090` (`task prometheus-ui`)
 * **Grafana UI**: `3000` (`task monitoring-ui`)
 * **ArgoCD UI**: `8080` (`task gitops-ui`)
 * **MinIO API**: `9000` (`task minio-proxy`)
-* **MinIO Console**: `9001` (`kubectl port-forward svc/minio -n minio 9001:9001`)
+* **MinIO Console**: `9001` (`task minio-console`)
 * **Wails Frontend Dev**: `9245`
 
 ## GitOps & Security (MinIO Credentials)
