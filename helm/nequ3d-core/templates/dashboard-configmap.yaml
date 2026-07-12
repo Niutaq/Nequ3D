@@ -4,7 +4,8 @@ metadata:
   name: {{ include "nequ3d-core.fullname" . }}-grafana-dashboard
   labels:
     grafana_dashboard: "1"
-    {{- include "nequ3d-core.labels" . | nindent 4 }}
+    app: {{ include "nequ3d-core.name" . }}
+    release: {{ .Release.Name }}
 data:
   nequ3d-dashboard.json: |-
     {
