@@ -13,8 +13,7 @@ spec:
       values: |
         mode: standalone
         replicas: 1
-        rootUser: admin
-        rootPassword: Nequ3dSecureStore2026!
+        existingSecret: minio-credentials
         buckets:
           - name: raw-scans
             policy: public
