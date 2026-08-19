@@ -14,3 +14,10 @@ processing/venv/
 # IDEs
 .vscode/
 .idea/
+
+# Sensitive and personal files
+argo_cd_data.txt
+next_session_plan.md
+
+# Wails bindings generated code
+nequ3d-app/frontend/bindings/

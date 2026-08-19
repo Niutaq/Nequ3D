@@ -34,7 +34,7 @@ Processing pipeline designed for mobile mapping and reality capture telemetry, l
 
 ## What Is It?
 
-<img width="2542" height="1391" alt="nequ3d-app" src="https://github.com/user-attachments/assets/27566edf-8846-449a-b866-1de25f5b2a7c" />
+<img alt="nequ3d-app" src="docs/nequ3d_19_08_2026.png" />
 
 The platform transforms raw reality-capture datasets into optimized OpenUSD scenes suitable for visualization, analytics, and long-term archival.
 
@@ -221,6 +221,28 @@ wails3 generate bindings && wails3 dev
 | Desktop UI       | Wails          |
 | AI Reporting     | Google Gemma   |
 | Containerization | Docker         |
+
+---
+
+# Infrastructure & Access
+
+## Standard Service Ports
+The following standard ports are used by the Kubernetes cluster components. You can access these services locally using the port-forwarding commands defined in the `Taskfile.yml` (these ports remain static unless modified in the configuration):
+
+* **Prometheus UI**: `9090` (`task prometheus-ui`)
+* **Grafana UI**: `3000` (`task monitoring-ui`)
+* **ArgoCD UI**: `8080` (`task gitops-ui`)
+* **MinIO API**: `9000` (`task minio-proxy`)
+* **MinIO Console**: `9001` (`task minio-console`)
+* **Wails Frontend Dev**: `9245`
+
+## GitOps & Security (MinIO Credentials)
+For local testing and development, credentials (like the MinIO root user and password) are stored in plaintext within files such as `gitops/apps/minio.yaml` or `minio-standalone.yaml`. **This is a known practice for local sandboxes but is highly insecure and constitutes a data leak risk in production.**
+
+To securely configure your own instance without leaking data:
+1. **Never commit raw passwords to the repository.**
+2. Retrieve auto-generated cluster secrets when available (e.g., run `task gitops-password` to fetch the auto-generated initial ArgoCD admin password directly from Kubernetes).
+3. For applications like MinIO, implement **Sealed Secrets** (by Bitnami), **SOPS**, or an **External Secrets Operator** (e.g., HashiCorp Vault) to encrypt your secrets before they enter the Git repository.
 
 ---
 

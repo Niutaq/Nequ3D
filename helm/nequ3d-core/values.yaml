@@ -1,9 +1,9 @@
 replicaCount: 1
 
 image:
-  repository: ghcr.io/niutaq/nequ3d-core
+  repository: nequ3d-core
   pullPolicy: IfNotPresent
-  tag: "latest"
+  tag: "v4"
 
 imagePullSecrets: []
 nameOverride: ""
@@ -31,16 +31,24 @@ service:
   type: ClusterIP
   port: 50051 # Assuming gRPC port
 
-resources: {}
-  # limits:
-  #   cpu: 100m
-  #   memory: 128Mi
-  # requests:
-  #   cpu: 100m
-  #   memory: 128Mi
+resources:
+  limits: {}
+    # nvidia.com/gpu: 1
 
 nodeSelector: {}
 
 tolerations: []
 
 affinity: {}
+
+ingress:
+  enabled: true
+  className: "nginx"
+  annotations:
+    nginx.ingress.kubernetes.io/backend-protocol: "GRPC"
+    nginx.ingress.kubernetes.io/proxy-body-size: "100m"
+  hosts:
+    - host: "nequ3d.local"
+      paths:
+        - path: /
+          pathType: Prefix

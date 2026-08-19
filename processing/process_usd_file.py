@@ -10,7 +10,7 @@ import zipfile  # Built-in library for ZIP/USDZ handling
 import numpy as np
 import trimesh
 from PIL import Image
-from pxr import Usd, UsdGeom, UsdShade  # type: ignore
+from pxr import Usd, UsdGeom, UsdShade, Gf  # type: ignore
 
 
 def unpack_usdz(usdz_path):
@@ -51,6 +51,8 @@ def unpack_usdz(usdz_path):
 
 
 def get_texture_for_prim(prim):
+    if not prim.HasAPI(UsdShade.MaterialBindingAPI):
+        UsdShade.MaterialBindingAPI.Apply(prim)
     mat, _ = UsdShade.MaterialBindingAPI(prim).ComputeBoundMaterial()
     if not mat:
         return None
@@ -113,6 +115,18 @@ def generate_proxy_mesh(usd_path, suffix="_proxy.glb", use_reconstructed=False):
                     continue
 
                 points = np.array(points)
+                
+                # Apply local-to-world transform
+                time_code = Usd.TimeCode.Default()
+                xform_cache = UsdGeom.XformCache(time_code)
+                world_transform = xform_cache.GetLocalToWorldTransform(prim)
+                
+                # Convert GfMatrix4d to numpy array and multiply points (row-major)
+                matrix = np.array(world_transform)
+                ones = np.ones((points.shape[0], 1))
+                points_4 = np.hstack([points, ones])
+                points = points_4.dot(matrix)[:, :3]
+
                 counts = np.array(face_counts)
                 indices = np.array(face_indices)
 
@@ -179,9 +193,14 @@ def generate_proxy_mesh(usd_path, suffix="_proxy.glb", use_reconstructed=False):
                 subsets = [p for p in prim.GetChildren() if p.IsA(UsdGeom.Subset)]
 
                 if subsets:
+                    assigned_faces = set()
                     for sub in subsets:
                         subset = UsdGeom.Subset(sub)
                         sub_indices = subset.GetIndicesAttr().Get()
+                        if not sub_indices:
+                            continue
+                            
+                        assigned_faces.update(sub_indices)
 
                         sub_tris = []
                         for orig_f in sub_indices:
@@ -204,6 +223,29 @@ def generate_proxy_mesh(usd_path, suffix="_proxy.glb", use_reconstructed=False):
 
                         tri_mesh.visual.material = build_material(img_path)
                         meshes.append(tri_mesh)
+                        
+                    # Handle unassigned faces
+                    unassigned_faces = set(range(len(counts))) - assigned_faces
+                    if unassigned_faces:
+                        sub_tris = []
+                        for orig_f in unassigned_faces:
+                            sub_tris.extend(original_face_to_triangles[orig_f])
+                            
+                        if sub_tris:
+                            faces_subset = triangulated_faces[sub_tris]
+                            tri_mesh = trimesh.Trimesh(
+                                vertices=points_out, faces=faces_subset, process=False
+                            )
+                            if uvs_out is not None:
+                                tri_mesh.visual = trimesh.visual.TextureVisuals(uv=uvs_out)
+                                
+                            tex = get_texture_for_prim(prim)
+                            img_path = os.path.join(base_dir, tex) if tex else None
+                            if img_path and use_reconstructed:
+                                img_path = img_path + "_reconstructed.png"
+                                
+                            tri_mesh.visual.material = build_material(img_path)
+                            meshes.append(tri_mesh)
                 else:
                     tri_mesh = trimesh.Trimesh(
                         vertices=points_out, faces=triangulated_faces, process=False
@@ -221,9 +263,18 @@ def generate_proxy_mesh(usd_path, suffix="_proxy.glb", use_reconstructed=False):
 
         if meshes:
             scene = trimesh.Scene(meshes)
-            transform = trimesh.transformations.rotation_matrix(np.pi / 2, [1, 0, 0])
-            for node_name in scene.graph.nodes_geometry:
-                scene.graph.update(node_name, matrix=transform)
+            
+            up_axis = UsdGeom.GetStageUpAxis(stage)
+            if up_axis == UsdGeom.Tokens.z:
+                # Convert Z-up to Y-up
+                transform = trimesh.transformations.rotation_matrix(-np.pi / 2, [1, 0, 0])
+                for node_name in scene.graph.nodes_geometry:
+                    scene.graph.update(node_name, matrix=transform)
+            elif up_axis == UsdGeom.Tokens.y:
+                # Already Y-up, no rotation needed, unless previously there was a bug
+                # where Sketchfab models were Y-up but needed rotation? Wait, Sketchfab models are usually Y-up.
+                # If they were falling over, it's because the unconditional rotation was flipping them!
+                pass
 
             scene.export(proxy_path)
             return proxy_path
@@ -469,9 +520,9 @@ def analyze_usd_stage(file_path, target_bpp="5", target_steps="150"):
             if counts:
                 telemetry["total_faces"] += len(counts)
 
-            indices = mesh.GetFaceVertexIndicesAttr().Get()
-            if indices:
-                telemetry["total_vertices"] += len(set(indices))
+            points = mesh.GetPointsAttr().Get()
+            if points:
+                telemetry["total_vertices"] += len(points)
 
         if prim.IsA(UsdShade.Material):
             telemetry["material_count"] += 1

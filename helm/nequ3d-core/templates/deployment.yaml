@@ -18,9 +18,20 @@ spec:
         - name: {{ .Chart.Name }}
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["python3", "-u", "rpc_server.py"]
+          env:
+            - name: MINIO_ENDPOINT
+              value: "http://minio.minio.svc.cluster.local:9000"
+            - name: NVIDIA_VISIBLE_DEVICES
+              value: "all"
+            - name: NVIDIA_DRIVER_CAPABILITIES
+              value: "all"
           ports:
             - name: grpc
               containerPort: 50051
+              protocol: TCP
+            - name: metrics
+              containerPort: 8001
               protocol: TCP
           resources:
             {{- toYaml .Values.resources | nindent 12 }}

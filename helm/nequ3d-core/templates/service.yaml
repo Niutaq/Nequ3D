@@ -11,5 +11,9 @@ spec:
       targetPort: grpc
       protocol: TCP
       name: grpc
+    - port: 8001
+      targetPort: metrics
+      protocol: TCP
+      name: metrics
   selector:
     app: {{ include "nequ3d-core.fullname" . }}

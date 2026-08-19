@@ -1,0 +1,11 @@
+fastapi
+uvicorn
+python-multipart
+torch
+transformers
+accelerate
+Pillow
+peft
+decord
+opencv-python-headless
+lmdb

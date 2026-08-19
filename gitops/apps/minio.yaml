@@ -1,0 +1,30 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: minio
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: 'https://charts.min.io/'
+    chart: minio
+    targetRevision: 5.4.0
+    helm:
+      values: |
+        mode: standalone
+        replicas: 1
+        existingSecret: minio-credentials
+        buckets:
+          - name: raw-scans
+            policy: public
+          - name: processed-models
+            policy: public
+  destination:
+    server: 'https://kubernetes.default.svc'
+    namespace: minio
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
