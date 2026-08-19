@@ -1,11 +1,12 @@
 # ==========================================
 # Nequ3D Core Environment (Edge-to-Core Pipeline)
-# Base: Ubuntu 22.04 with CUDA 12.1 Development Tools
+# Base: Ubuntu 24.04 with CUDA 12.6 Development Tools
 # ==========================================
-FROM nvidia/cuda:12.1.1-devel-ubuntu22.04
+FROM nvidia/cuda:12.6.0-devel-ubuntu24.04
 
 # Disable interactive prompts during apt-get
 ENV DEBIAN_FRONTEND=noninteractive
+ENV PIP_BREAK_SYSTEM_PACKAGES=1
 
 # 1. Install system dependencies
 RUN apt-get update && apt-get install -y \

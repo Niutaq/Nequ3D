@@ -64,6 +64,14 @@ export const content = {
     targetBitrate: "TARGET BITRATE",
     trainingSteps: "TRAINING STEPS",
     analyticsEngine: "ANALYTICS ENGINE",
+    loadSketchfabBtn: "Load & Analyze",
+    sketchfabUrl: "Model URL or UID",
+    sketchfabToken: "API Token (required)",
+    sketchfabDownloading: "Downloading USDZ...",
+    sketchfabConnecting: "Connecting to API...",
+    sketchfabSuccess: "Downloaded successfully!",
+    sketchfabMissing: "Missing URL or token!",
+    sketchfabError: "Error",
   },
   pl: {
     appSubtitle: "Potok OpenUSD Edge-to-Core",
@@ -126,6 +134,14 @@ export const content = {
     targetBitrate: "DOCELOWY BITRATE",
     trainingSteps: "KROKI TRENINGU",
     analyticsEngine: "SILNIK ANALITYCZNY",
+    loadSketchfabBtn: "Pobierz i Analizuj",
+    sketchfabUrl: "Model URL lub UID",
+    sketchfabToken: "API Token (wymagany)",
+    sketchfabDownloading: "Pobieranie USDZ...",
+    sketchfabConnecting: "Łączenie z API Sketchfab...",
+    sketchfabSuccess: "Pobrano pomyślnie!",
+    sketchfabMissing: "Brak URL lub tokena!",
+    sketchfabError: "Błąd",
   },
 } as const;
 
@@ -171,6 +187,13 @@ export class IntLayer {
       const key = el.getAttribute("data-i18n-aria") as I18nKey | null;
       if (key && this.t[key]) {
         el.setAttribute("aria-label", this.t[key]);
+      }
+    });
+
+    root.querySelectorAll<HTMLElement>("[data-i18n-placeholder]").forEach((el) => {
+      const key = el.getAttribute("data-i18n-placeholder") as I18nKey | null;
+      if (key && this.t[key]) {
+        el.setAttribute("placeholder", this.t[key]);
       }
     });
   }

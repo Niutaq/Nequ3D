@@ -354,25 +354,32 @@ func (a *App) ProcessModel(absolutePath string, bpp string, steps string) (strin
 		steps = "150"
 	}
 
-	// FAST TRACK: If WebGL format (GLB/GLTF), bypass Core processing
+	// If we are given a .glb, check if a .usdz version exists alongside it (e.g. from Sketchfab download)
 	ext := strings.ToLower(filepath.Ext(absolutePath))
 	if ext == ".glb" || ext == ".gltf" {
-		proxyResponse, err := json.Marshal(map[string]any{
-			"status":               "proxy_mode",
-			"message":              "WebGL format loaded (GLB/GLTF).",
-			"details":              "Bypassed OpenUSD Core Analysis. Displaying 3D proxy viewer.",
-			"file_path":            absolutePath,
-			"proxy_glb_path":       absolutePath,
-			"ntc_bypassed":         true,
-			"ntc_bypass_reason":    "GLB/GLTF proxy mode does not run the USD texture compression pipeline.",
-			"has_ntc_quality":      false,
-			"ntc_compressed_files": []any{},
-		})
-		if err != nil {
-			return "", fmt.Errorf("failed to marshal proxy telemetry: %v", err)
+		usdzPath := strings.TrimSuffix(absolutePath, ext) + ".usdz"
+		if _, err := os.Stat(usdzPath); err == nil {
+			// Found USDZ version, swap to it so we process it in Core instead of bypassing
+			absolutePath = usdzPath
+			ext = ".usdz"
+		} else {
+			// No USDZ found, standard WebGL proxy bypass
+			proxyResponse, err := json.Marshal(map[string]any{
+				"status":               "proxy_mode",
+				"message":              "WebGL format loaded (GLB/GLTF).",
+				"details":              "Bypassed OpenUSD Core Analysis. Displaying 3D proxy viewer.",
+				"file_path":            absolutePath,
+				"proxy_glb_path":       absolutePath,
+				"ntc_bypassed":         true,
+				"ntc_bypass_reason":    "GLB/GLTF proxy mode does not run the USD texture compression pipeline.",
+				"has_ntc_quality":      false,
+				"ntc_compressed_files": []any{},
+			})
+			if err != nil {
+				return "", fmt.Errorf("failed to marshal proxy telemetry: %v", err)
+			}
+			return string(proxyResponse), nil
 		}
-
-		return string(proxyResponse), nil
 	}
 
 	if ext == ".splat" || ext == ".ply" {
@@ -395,8 +402,8 @@ func (a *App) ProcessModel(absolutePath string, bpp string, steps string) (strin
 		return "", fmt.Errorf("unsupported asset format %q", ext)
 	}
 
-	// Connect to Python gRPC server via Ingress
-	conn, err := grpc.NewClient("nequ3d.local:80", 
+	// Connect to Python gRPC server (exposed via task run-core on port 50051)
+	conn, err := grpc.NewClient("127.0.0.1:50051", 
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithDefaultCallOptions(
 			grpc.MaxCallRecvMsgSize(100*1024*1024),
@@ -594,4 +601,94 @@ func (a *App) LocateObjects(imageBase64 string, prompt string) (string, error) {
 	}
 
 	return string(jsonResp), nil
+}
+
+func extractSketchfabUID(input string) string {
+	if strings.Contains(input, "sketchfab.com/3d-models/") {
+		parts := strings.Split(input, "-")
+		if len(parts) > 0 {
+			return parts[len(parts)-1]
+		}
+	}
+	return input
+}
+
+func (a *App) DownloadFromSketchfab(uid string, token string) (string, error) {
+	uid = extractSketchfabUID(uid)
+
+	req, err := http.NewRequest("GET", "https://api.sketchfab.com/v3/models/"+uid+"/download", nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Token "+token)
+
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("failed to contact Sketchfab API: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("Sketchfab API error (%d): %s", resp.StatusCode, string(body))
+	}
+
+	var data struct {
+		Usdz struct {
+			Url string `json:"url"`
+		} `json:"usdz"`
+		Glb struct {
+			Url string `json:"url"`
+		} `json:"glb"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		return "", fmt.Errorf("failed to parse Sketchfab response: %v", err)
+	}
+
+	if data.Usdz.Url == "" {
+		return "", fmt.Errorf("Ten model nie posiada formatu USDZ (wymaganego przez NTC).")
+	}
+	if data.Glb.Url == "" {
+		return "", fmt.Errorf("Ten model nie posiada formatu GLB (wymaganego do podglądu).")
+	}
+
+	downloadClient := &http.Client{Timeout: 5 * time.Minute}
+	cwd, _ := os.Getwd()
+	downloadsDir := filepath.Join(cwd, "..", "data", "downloads")
+	os.MkdirAll(downloadsDir, 0755)
+
+	// Download USDZ
+	usdzReq, err := http.NewRequest("GET", data.Usdz.Url, nil)
+	if err != nil { return "", err }
+	usdzResp, err := downloadClient.Do(usdzReq)
+	if err != nil { return "", fmt.Errorf("failed to download USDZ: %v", err) }
+	defer usdzResp.Body.Close()
+	
+	if usdzResp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("failed to download USDZ, status code: %d", usdzResp.StatusCode)
+	}
+	usdzPath := filepath.Join(downloadsDir, uid+".usdz")
+	usdzOut, err := os.Create(usdzPath)
+	if err != nil { return "", err }
+	io.Copy(usdzOut, usdzResp.Body)
+	usdzOut.Close()
+
+	// Download GLB for Preview
+	glbReq, err := http.NewRequest("GET", data.Glb.Url, nil)
+	if err != nil { return "", err }
+	glbResp, err := downloadClient.Do(glbReq)
+	if err != nil { return "", fmt.Errorf("failed to download GLB: %v", err) }
+	defer glbResp.Body.Close()
+
+	if glbResp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("failed to download GLB, status code: %d", glbResp.StatusCode)
+	}
+	glbPath := filepath.Join(downloadsDir, uid+".glb")
+	glbOut, err := os.Create(glbPath)
+	if err != nil { return "", err }
+	io.Copy(glbOut, glbResp.Body)
+	glbOut.Close()
+
+	return glbPath, nil
 }

@@ -4,6 +4,7 @@ import {
   GenerateRenovationAdvice,
   ProcessModel,
   SelectFile,
+  DownloadFromSketchfab
 } from "../bindings/changeme/app";
 import "@google/model-viewer";
 import { Events } from "@wailsio/runtime";
@@ -340,6 +341,19 @@ function initUI(): void {
             ${Icons.folder}
             <span data-i18n="loadAssetBtn"></span>
           </button>
+          
+          <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 12px; padding: 12px; background: linear-gradient(145deg, var(--bg-darker) 0%, rgba(13, 148, 136, 0.08) 100%); border: 1px solid var(--accent-teal); border-radius: 6px;">
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <span class="section-label" style="border: none; padding: 0; color: var(--accent-teal); font-weight: bold; letter-spacing: 0.1em;">SKETCHFAB (USDZ)</span>
+            </div>
+            <input type="text" id="sketchfab-url" data-i18n-placeholder="sketchfabUrl" placeholder="Model URL or UID" class="technical-select" style="padding: 8px; font-size: 0.65rem; border: 1px solid rgba(13, 148, 136, 0.3);">
+            <input type="password" id="sketchfab-token" data-i18n-placeholder="sketchfabToken" placeholder="API Token" class="technical-select" style="padding: 8px; font-size: 0.65rem; border: 1px solid rgba(13, 148, 136, 0.3);">
+            <button id="sketchfab-btn" class="technical-button primary" style="font-weight: bold; padding: 12px;">
+              <span data-i18n="loadSketchfabBtn">Pobierz i Analizuj</span>
+            </button>
+            <div id="sketchfab-status" style="font-size: 0.6rem; color: var(--text-muted); font-family: var(--font-mono); text-align: center; margin-top: 4px; word-wrap: break-word;"></div>
+          </div>
+          
           <div id="file-path" class="telemetry-label" style="text-transform: none; word-break: break-all; margin-top: 6px;" data-i18n="noFile"></div>
         </div>
 
@@ -577,6 +591,39 @@ function attachEventListeners(): void {
     const path = await SelectFile();
     if (!path) return;
     await routeSelectedAsset(path);
+  });
+
+  const sketchfabBtn = getEl<HTMLButtonElement>("sketchfab-btn");
+  const sketchfabStatus = getEl<HTMLDivElement>("sketchfab-status");
+  sketchfabBtn.addEventListener("click", async () => {
+    const urlInput = getEl<HTMLInputElement>("sketchfab-url").value;
+    const tokenInput = getEl<HTMLInputElement>("sketchfab-token").value;
+    if (!urlInput || !tokenInput) {
+        sketchfabStatus.style.color = "red";
+        sketchfabStatus.textContent = IntLayer.t.sketchfabMissing;
+        return;
+    }
+    
+    sketchfabBtn.disabled = true;
+    const oldHtml = sketchfabBtn.innerHTML;
+    sketchfabBtn.innerHTML = `<div class="spinner"></div><span style="font-size: 0.6rem;">${IntLayer.t.sketchfabDownloading}</span>`;
+    sketchfabStatus.style.color = "var(--text-muted)";
+    sketchfabStatus.textContent = IntLayer.t.sketchfabConnecting;
+    
+    try {
+        const path = await DownloadFromSketchfab(urlInput, tokenInput);
+        if (path) {
+            sketchfabStatus.style.color = "var(--accent-teal)";
+            sketchfabStatus.textContent = IntLayer.t.sketchfabSuccess;
+            await routeSelectedAsset(path);
+        }
+    } catch (e) {
+        sketchfabStatus.style.color = "red";
+        sketchfabStatus.textContent = `${IntLayer.t.sketchfabError}: ` + String(e).replace("Sketchfab API error (400):", "");
+    } finally {
+        sketchfabBtn.disabled = false;
+        sketchfabBtn.innerHTML = oldHtml;
+    }
   });
 
   analyzeBtn.addEventListener("click", runAnalysis);
