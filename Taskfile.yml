@@ -11,13 +11,13 @@ tasks:
 
   build-core:
     desc: Builds the Docker image for the processing core
-    dir: processing
+    dir: nequ3d-core
     cmds:
       - docker build -t nequ3d-core:v4 .
 
   run-core:
     desc: Starts the Python gRPC server locally (Requires a separate terminal!)
-    dir: processing
+    dir: nequ3d-core
     cmds:
       - cmd: docker run --rm --gpus all -e MINIO_ENDPOINT="http://host.docker.internal:9000" -p 50051:50051 -p 8001:8001 nequ3d-core:v4
         platforms: [windows, linux, darwin]
@@ -98,8 +98,28 @@ tasks:
       - kubectl port-forward svc/minio -n minio 9001:9001
 
   run-all:
-    desc: Builds Core, generates ProtoBufs and starts Wails App
+    desc: One-command dev launch — builds core, then starts MinIO forward + gRPC core in background and the app in the foreground
     cmds:
       - task: proto
       - task: build-core
-      - task: dev-app
+      - cmd: pwsh -File ./scripts/run-all.ps1
+        platforms: [windows]
+
+  # Starts kubectl port-forward for MinIO in the background so the app can
+  # reach 127.0.0.1:9000. Exits cleanly when the parent task stops.
+  minio-forward:
+    desc: "Background: forwards the MinIO service to 127.0.0.1:9000"
+    background: true
+    ignore_error: true
+    cmds:
+      - cmd: kubectl port-forward svc/minio 9000:9000 -n minio
+
+  # Starts the Python gRPC core (Docker) in the background so the app can
+  # reach 127.0.0.1:50051. Tries with GPU first, falls back to CPU-only.
+  core-server:
+    desc: "Background: starts the gRPC processing core"
+    background: true
+    ignore_error: true
+    cmds:
+      - cmd: docker run --rm --gpus all -e MINIO_ENDPOINT="http://host.docker.internal:9000" -p 50051:50051 -p 8001:8001 nequ3d-core:v4
+      - cmd: docker run --rm -e MINIO_ENDPOINT="http://host.docker.internal:9000" -p 50051:50051 -p 8001:8001 nequ3d-core:v4

@@ -1,0 +1,10 @@
+usd-core==26.5
+trimesh
+numpy
+Pillow
+grpcio
+grpcio-tools
+prometheus-client
+python-json-logger
+requests
+boto3

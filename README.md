@@ -28,7 +28,7 @@ Processing pipeline designed for mobile mapping and reality capture telemetry, l
 ```text
 .
 ├── backend/        # High-performance Go orchestration server & REST API
-├── processing/     # OpenUSD processing scripts & RTX NTC pipeline
+├── nequ3d-core/    # OpenUSD processing scripts & RTX NTC pipeline
 ├── viewer/         # Visualization and analytics frontend
 ├── data/           # Raw and optimized spatial assets (gitignored)
 └── docs/           # Engineering thesis and technical documentation
@@ -129,7 +129,7 @@ Wails CLI v3.x.x
 Navigate to the processing module:
 
 ```bash
-cd processing
+cd nequ3d-core
 ```
 
 Build the OpenUSD processing container:
@@ -202,7 +202,7 @@ wails3 generate bindings && wails3 dev
 Build the processing environment:
 
 ```bash
-cd processing
+cd nequ3d-core
 docker build -t nequ3d-core:latest .
 ```
 

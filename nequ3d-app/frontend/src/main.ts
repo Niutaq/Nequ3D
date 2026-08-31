@@ -46,7 +46,9 @@ type PipelineTelemetry = {
   [key: string]: unknown;
 };
 
-const LOCAL_FILE_ENDPOINT = "http://localhost:8081/api/local-file?path=";
+// Fallback used only until the backend publishes the dynamically-assigned
+// local-file server URL via the "localServerUrl" event.
+let LOCAL_FILE_ENDPOINT = "http://localhost:9387/api/local-file?path=";
 const MIN_LEFT_PANEL = 280;
 const MIN_RIGHT_PANEL = 300;
 const MIN_CENTER_PANEL = 420;
@@ -160,7 +162,7 @@ style.textContent = `
   .sys-bar-fill { height: 100%; background: var(--accent-teal); transition: width 0.3s; }
 
   .technical-button {
-    background: var(--bg-darker);
+    background: linear-gradient(180deg, var(--bg-panel) 0%, var(--bg-darker) 100%);
     border: 1px solid var(--border-color);
     color: var(--text-main);
     padding: 16px;
@@ -173,9 +175,11 @@ style.textContent = `
     align-items: center;
     justify-content: center;
     gap: 14px;
-    transition: all 0.15s ease;
-    border-radius: 0;
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    border-radius: 8px;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.05), 0 2px 4px rgba(0,0,0,0.1);
   }
+  .technical-button:active:not(:disabled) { box-shadow: inset 0 2px 4px rgba(0,0,0,0.4); transform: translateY(1px); }
   .technical-button:hover:not(:disabled) { border-color: var(--accent-teal); background: var(--accent-teal-dim); color: var(--accent-teal); }
   .technical-button:disabled { opacity: 0.4; cursor: not-allowed; }
   .technical-button.primary { border-color: var(--accent-teal); color: var(--accent-teal); background: var(--accent-teal-dim); }
@@ -252,10 +256,12 @@ style.textContent = `
   .panel-gutter.dragging { background: var(--accent-teal); }
 
   .topbar-actions { display: flex; gap: 12px; align-items: center; }
-  .segmented { display: flex; border: 1px solid var(--border-color); background: var(--bg-darker); }
-  .segmented .view-tab { min-width: 44px; height: 44px; padding: 0 16px; display: flex; align-items: center; justify-content: center; }
+  .segmented { display: flex; border: 1px solid var(--border-color); background: var(--bg-darker); border-radius: 6px; overflow: hidden; box-shadow: inset 0 1px 3px rgba(0,0,0,0.2), 0 1px 1px rgba(255,255,255,0.05); }
+  .segmented .view-tab { min-width: 44px; height: 44px; padding: 0 16px; display: flex; align-items: center; justify-content: center; background: linear-gradient(180deg, var(--bg-panel) 0%, var(--bg-darker) 100%); transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1); border-right: 1px solid var(--border-color); box-shadow: inset 0 1px 0 rgba(255,255,255,0.05); }
+  .segmented .view-tab:hover { background: linear-gradient(180deg, var(--accent-teal-dim) 0%, var(--bg-darker) 100%); color: var(--text-main); }
+  .segmented .view-tab:active { box-shadow: inset 0 2px 4px rgba(0,0,0,0.4); background: var(--bg-darker); }
   .segmented .view-tab:last-child { border-right: none; }
-  .text-scale-control .view-tab { min-width: 46px; }
+  .text-scale-control .view-tab { min-width: 72px; height: 50px; font-size: 1.25rem; font-weight: 800; text-shadow: 0 1px 2px rgba(0,0,0,0.5); }
 `;
 document.head.appendChild(style);
 
@@ -579,6 +585,19 @@ function attachEventListeners(): void {
   });
 
   try {
+    Events.On("localServerUrl", (event: unknown) => {
+      const data = (event as any)?.data;
+      const url = Array.isArray(data) ? data[0] : data;
+      if (typeof url === "string" && url.length > 0 && LOCAL_FILE_ENDPOINT !== url) {
+        LOCAL_FILE_ENDPOINT = url;
+        // The local-file server may have started after the user already
+        // picked a mesh (dynamic port race). Re-render the preview so the
+        // model actually shows.
+        if (currentAbsolutePath && isMeshRenderable(currentAbsolutePath)) {
+          previewMeshAsset(currentAbsolutePath);
+        }
+      }
+    });
     Events.On("sysStats", (event: unknown) => {
       const stats = normalizeStatsEvent(event);
       if (stats) updateSystemStats(stats);
@@ -619,7 +638,7 @@ function attachEventListeners(): void {
         }
     } catch (e) {
         sketchfabStatus.style.color = "red";
-        sketchfabStatus.textContent = `${IntLayer.t.sketchfabError}: ` + String(e).replace("Sketchfab API error (400):", "");
+        sketchfabStatus.textContent = friendlySketchfabError(e);
     } finally {
         sketchfabBtn.disabled = false;
         sketchfabBtn.innerHTML = oldHtml;
@@ -690,6 +709,25 @@ function initResizablePanels(): void {
 
 function initComparisonResize(): void {
   syncComparisonLayout();
+}
+
+// Maps the backend's machine-readable Sketchfab error code to a localized,
+// user-friendly message. Always returns a complete, self-contained message
+// with the "Error:" prefix applied exactly once (no double-prefix like
+// "Błąd: Błąd"). Unknown/legacy errors fall back to the raw text.
+function friendlySketchfabError(err: unknown): string {
+  const prefix = IntLayer.t.sketchfabError + ": ";
+  const text = String(err);
+  const m = text.match(/(SKETCHFAB_[A-Z_]+)(?::|$)/);
+  if (m) {
+    const key = m[1] as keyof typeof IntLayer.t;
+    const localized = (IntLayer.t as Record<string, string>)[key];
+    if (localized && localized !== IntLayer.t.sketchfabError) {
+      return prefix + localized;
+    }
+  }
+  const cleaned = text.replace("Sketchfab API error (", "").replace("):", "");
+  return prefix + cleaned;
 }
 
 async function runAnalysis(): Promise<void> {
@@ -1241,8 +1279,8 @@ function localFileUrl(path: string): string {
 function toHostPath(path: string): string {
   if (!path) return "";
   const trimmed = path.replace(/^file:\/\//i, "");
-  const workspacePrefix = "/workspace/";
-  const windowsWorkspacePrefix = "\\workspace\\";
+  const workspacePrefix = "/tmp/workspace/";
+  const windowsWorkspacePrefix = "\\tmp\\workspace\\";
 
   if (trimmed.startsWith(workspacePrefix)) {
     return `${currentModelDir}${trimmed
