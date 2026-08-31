@@ -1,5 +1,9 @@
 # OpenUSD Edge-to-Core Asset Pipeline & Analytics Showcase
 
+<div align="center">
+  <img src="logo.jpg" alt="Nequ3D Logo" width="300" />
+</div>
+
 [![Docker](https://img.shields.io/badge/Docker-Required-2496ED?logo=docker\&logoColor=white)](https://www.docker.com/)
 [![Wails](https://img.shields.io/badge/Wails-v3-orange)](https://v3alpha.wails.io/)
 [![OpenUSD](https://img.shields.io/badge/OpenUSD-NVIDIA-success)](https://openusd.org/)
