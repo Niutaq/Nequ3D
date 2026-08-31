@@ -1,0 +1,15 @@
+version: 2
+updates:
+  - package-ecosystem: "gomod"
+    directory: "/nequ3d-app"
+    schedule:
+      interval: "weekly"
+    groups:
+      golang:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "docker"
+    directory: "/ml-services/locate-anything"
+    schedule:
+      interval: "weekly"

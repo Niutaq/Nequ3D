@@ -1,5 +1,9 @@
 # OpenUSD Edge-to-Core Asset Pipeline & Analytics Showcase
 
+<div align="center">
+  <img src="logo.jpg" alt="Nequ3D Logo" width="300" />
+</div>
+
 [![Docker](https://img.shields.io/badge/Docker-Required-2496ED?logo=docker\&logoColor=white)](https://www.docker.com/)
 [![Wails](https://img.shields.io/badge/Wails-v3-orange)](https://v3alpha.wails.io/)
 [![OpenUSD](https://img.shields.io/badge/OpenUSD-NVIDIA-success)](https://openusd.org/)
@@ -13,8 +17,8 @@ Processing pipeline designed for mobile mapping and reality capture telemetry, l
 ## Architecture Overview
 
 * **Edge Acquisition**: Mobile LiDAR SLAM & High-Resolution Photogrammetry (Reality Capture).
-* **Control Layer (Backend)**: Asynchronous, stream-based Go server utilizing `go-chi` and structured JSON logging with `log/slog`.
-* **Processing Layer (Worker)**: Headless Python services leveraging NVIDIA OpenUSD libraries and RTX Neural Texture Compression (NTC) for optimized memory utilization.
+* **Control Layer (Backend)**: Asynchronous, stream-based Go server using gRPC and NATS for orchestration.
+* **Processing Layer (Worker)**: Headless Python gRPC services leveraging NVIDIA OpenUSD libraries and RTX Neural Texture Compression (NTC) for optimized memory utilization.
 * **Analysis & Visualization**: Desktop analytics environment built with Wails, featuring geometric measurements, telemetry dashboards, and local LLM-assisted reporting (Google Gemma).
 
 ---
@@ -23,9 +27,8 @@ Processing pipeline designed for mobile mapping and reality capture telemetry, l
 
 ```text
 .
-├── backend/        # High-performance Go orchestration server & REST API
-├── processing/     # OpenUSD processing scripts & RTX NTC pipeline
-├── viewer/         # Visualization and analytics frontend
+├── nequ3d-app/     # Desktop app (Wails frontend) & Go Orchestrator backend
+├── nequ3d-core/    # OpenUSD processing scripts, Python gRPC server & RTX NTC pipeline
 ├── data/           # Raw and optimized spatial assets (gitignored)
 └── docs/           # Engineering thesis and technical documentation
 ```
@@ -52,6 +55,14 @@ The processing workflow enables:
 # Prerequisites
 
 Before running the system, install the required tooling.
+
+## Task
+We use [Taskfile](https://taskfile.dev/) to manage build and development commands.
+
+### Installation
+https://taskfile.dev/installation/
+
+---
 
 ## Ollama (Local LLM Engine)
 
@@ -82,18 +93,6 @@ Docker is used to build and execute the isolated OpenUSD processing environment.
 
 https://www.docker.com/products/docker-desktop/
 
-Verify your installation:
-
-```bash
-docker --version
-```
-
-Expected output:
-
-```text
-Docker version XX.X.X
-```
-
 ---
 
 ## Wails v3
@@ -104,108 +103,30 @@ Wails powers the native desktop analytics application.
 
 https://v3alpha.wails.io/getting-started/installation/
 
-Verify installation:
-
-```bash
-wails3 version
-```
-
-Expected output:
-
-```text
-Wails CLI v3.x.x
-```
-
 ---
 
-# Building the Processing Environment
+# Quick Start & Running the Application
 
-Navigate to the processing module:
+The project uses a unified `Taskfile.yml` to simplify running the system.
 
+### 1. Build and Run the Wails Development Environment
+
+In your main terminal, run:
 ```bash
-cd processing
+task dev
 ```
+This command automatically:
+* Generates gRPC protobuf files.
+* Builds the Docker image for the processing core (`nequ3d-core:latest`).
+* Generates Wails bindings and starts the frontend.
 
-Build the OpenUSD processing container:
+### 2. Start the Processing (gRPC) Server
 
+Open a **new, separate terminal**, and run:
 ```bash
-docker build -t nequ3d-core:latest .
+task run-core
 ```
-
-This image contains:
-
-* NVIDIA OpenUSD runtime
-* RTX Neural Texture Compression toolchain
-* Python processing scripts
-* Asset optimization pipeline
-* Headless worker services
-
-Verify the image was created successfully:
-
-```bash
-docker images
-```
-
-Expected result:
-
-```text
-REPOSITORY      TAG       IMAGE ID
-nequ3d-core     latest    xxxxxxxxxxxx
-```
-
----
-
-# Running the Analytics Application
-
-Navigate to the application root:
-
-```bash
-cd nequ3d-app
-```
-
-Generate Wails bindings:
-
-```bash
-wails3 generate bindings
-```
-
-Launch the development environment:
-
-```bash
-wails3 dev
-```
-
-The development environment automatically:
-
-* Generates Go ↔ Frontend bindings
-* Launches the desktop application
-* Enables hot reload
-* Connects backend services
-* Streams telemetry data
-
-For convenience, both commands can be executed together:
-
-```bash
-wails3 generate bindings && wails3 dev
-```
-
----
-
-# Quick Start
-
-Build the processing environment:
-
-```bash
-cd processing
-docker build -t nequ3d-core:latest .
-```
-
-Start the analytics application:
-
-```bash
-cd ../nequ3d-app
-wails3 generate bindings && wails3 dev
-```
+This starts the Python gRPC server (listening on port 50051) which handles the OpenUSD manipulation and RTX NTC processing tasks sent by the Wails app.
 
 ---
 
@@ -214,7 +135,7 @@ wails3 generate bindings && wails3 dev
 | Layer            | Technology     |
 | ---------------- | -------------- |
 | Backend          | Go             |
-| API              | Chi Router     |
+| RPC / Messaging  | gRPC & NATS    |
 | Processing       | Python         |
 | Scene Format     | OpenUSD        |
 | Compression      | NVIDIA RTX NTC |

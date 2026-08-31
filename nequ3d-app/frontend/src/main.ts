@@ -254,7 +254,7 @@ style.textContent = `
   .segmented { display: flex; border: 1px solid var(--border-color); background: var(--bg-darker); }
   .segmented .view-tab { min-width: 44px; height: 44px; padding: 0 16px; display: flex; align-items: center; justify-content: center; }
   .segmented .view-tab:last-child { border-right: none; }
-  .text-scale-control .view-tab { min-width: 46px; }
+  .text-scale-control .view-tab { min-width: 60px; font-size: 1rem; font-weight: bold; }
 `;
 document.head.appendChild(style);
 

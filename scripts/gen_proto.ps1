@@ -32,11 +32,11 @@ Write-Host "Generating code for Go..."
 Write-Host "Go code generation successful! Output in: $OutputDir"
 
 Write-Host "Installing dependencies and generating code for Python..."
-$PyOutputDir = "$ProjectRoot\processing\pipeline_rpc"
+$PyOutputDir = "$ProjectRoot\nequ3d-core\pipeline_rpc"
 New-Item -ItemType Directory -Force -Path $PyOutputDir | Out-Null
 New-Item -ItemType File -Force -Path "$PyOutputDir\__init__.py" | Out-Null
 
-$VenvPython = "$ProjectRoot\processing\venv\Scripts\python.exe"
+$VenvPython = "$ProjectRoot\nequ3d-core\venv\Scripts\python.exe"
 if (-not (Test-Path $VenvPython)) {
     $VenvPython = "python"
 }
