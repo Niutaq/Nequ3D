@@ -17,8 +17,8 @@ Processing pipeline designed for mobile mapping and reality capture telemetry, l
 ## Architecture Overview
 
 * **Edge Acquisition**: Mobile LiDAR SLAM & High-Resolution Photogrammetry (Reality Capture).
-* **Control Layer (Backend)**: Asynchronous, stream-based Go server using gRPC and NATS for orchestration.
-* **Processing Layer (Worker)**: Headless Python gRPC services leveraging NVIDIA OpenUSD libraries and RTX Neural Texture Compression (NTC) for optimized memory utilization.
+* **Control Layer (Backend)**: Asynchronous, stream-based Go server utilizing `go-chi` and structured JSON logging with `log/slog`.
+* **Processing Layer (Worker)**: Headless Python services leveraging NVIDIA OpenUSD libraries and RTX Neural Texture Compression (NTC) for optimized memory utilization.
 * **Analysis & Visualization**: Desktop analytics environment built with Wails, featuring geometric measurements, telemetry dashboards, and local LLM-assisted reporting (Google Gemma).
 
 ---
@@ -27,8 +27,9 @@ Processing pipeline designed for mobile mapping and reality capture telemetry, l
 
 ```text
 .
-├── nequ3d-app/     # Desktop app (Wails frontend) & Go Orchestrator backend
-├── nequ3d-core/    # OpenUSD processing scripts, Python gRPC server & RTX NTC pipeline
+├── backend/        # High-performance Go orchestration server & REST API
+├── nequ3d-core/    # OpenUSD processing scripts & RTX NTC pipeline
+├── viewer/         # Visualization and analytics frontend
 ├── data/           # Raw and optimized spatial assets (gitignored)
 └── docs/           # Engineering thesis and technical documentation
 ```
@@ -37,7 +38,9 @@ Processing pipeline designed for mobile mapping and reality capture telemetry, l
 
 ## What Is It?
 
-<img width="2542" height="1391" alt="nequ3d-app" src="https://github.com/user-attachments/assets/27566edf-8846-449a-b866-1de25f5b2a7c" />
+<img alt="nequ3d-app" src="docs/nequ3d_scanning_process.jpg" />
+
+<img alt="nequ3d-app" src="docs/nequ3d_19_08_2026.png" />
 
 The platform transforms raw reality-capture datasets into optimized OpenUSD scenes suitable for visualization, analytics, and long-term archival.
 
@@ -55,14 +58,6 @@ The processing workflow enables:
 # Prerequisites
 
 Before running the system, install the required tooling.
-
-## Task
-We use [Taskfile](https://taskfile.dev/) to manage build and development commands.
-
-### Installation
-https://taskfile.dev/installation/
-
----
 
 ## Ollama (Local LLM Engine)
 
@@ -93,6 +88,18 @@ Docker is used to build and execute the isolated OpenUSD processing environment.
 
 https://www.docker.com/products/docker-desktop/
 
+Verify your installation:
+
+```bash
+docker --version
+```
+
+Expected output:
+
+```text
+Docker version XX.X.X
+```
+
 ---
 
 ## Wails v3
@@ -103,30 +110,108 @@ Wails powers the native desktop analytics application.
 
 https://v3alpha.wails.io/getting-started/installation/
 
+Verify installation:
+
+```bash
+wails3 version
+```
+
+Expected output:
+
+```text
+Wails CLI v3.x.x
+```
+
 ---
 
-# Quick Start & Running the Application
+# Building the Processing Environment
 
-The project uses a unified `Taskfile.yml` to simplify running the system.
+Navigate to the processing module:
 
-### 1. Build and Run the Wails Development Environment
-
-In your main terminal, run:
 ```bash
-task dev
+cd nequ3d-core
 ```
-This command automatically:
-* Generates gRPC protobuf files.
-* Builds the Docker image for the processing core (`nequ3d-core:latest`).
-* Generates Wails bindings and starts the frontend.
 
-### 2. Start the Processing (gRPC) Server
+Build the OpenUSD processing container:
 
-Open a **new, separate terminal**, and run:
 ```bash
-task run-core
+docker build -t nequ3d-core:latest .
 ```
-This starts the Python gRPC server (listening on port 50051) which handles the OpenUSD manipulation and RTX NTC processing tasks sent by the Wails app.
+
+This image contains:
+
+* NVIDIA OpenUSD runtime
+* RTX Neural Texture Compression toolchain
+* Python processing scripts
+* Asset optimization pipeline
+* Headless worker services
+
+Verify the image was created successfully:
+
+```bash
+docker images
+```
+
+Expected result:
+
+```text
+REPOSITORY      TAG       IMAGE ID
+nequ3d-core     latest    xxxxxxxxxxxx
+```
+
+---
+
+# Running the Analytics Application
+
+Navigate to the application root:
+
+```bash
+cd nequ3d-app
+```
+
+Generate Wails bindings:
+
+```bash
+wails3 generate bindings
+```
+
+Launch the development environment:
+
+```bash
+wails3 dev
+```
+
+The development environment automatically:
+
+* Generates Go ↔ Frontend bindings
+* Launches the desktop application
+* Enables hot reload
+* Connects backend services
+* Streams telemetry data
+
+For convenience, both commands can be executed together:
+
+```bash
+wails3 generate bindings && wails3 dev
+```
+
+---
+
+# Quick Start
+
+Build the processing environment:
+
+```bash
+cd nequ3d-core
+docker build -t nequ3d-core:latest .
+```
+
+Start the analytics application:
+
+```bash
+cd ../nequ3d-app
+wails3 generate bindings && wails3 dev
+```
 
 ---
 
@@ -135,13 +220,35 @@ This starts the Python gRPC server (listening on port 50051) which handles the O
 | Layer            | Technology     |
 | ---------------- | -------------- |
 | Backend          | Go             |
-| RPC / Messaging  | gRPC & NATS    |
+| API              | Chi Router     |
 | Processing       | Python         |
 | Scene Format     | OpenUSD        |
 | Compression      | NVIDIA RTX NTC |
 | Desktop UI       | Wails          |
 | AI Reporting     | Google Gemma   |
 | Containerization | Docker         |
+
+---
+
+# Infrastructure & Access
+
+## Standard Service Ports
+The following standard ports are used by the Kubernetes cluster components. You can access these services locally using the port-forwarding commands defined in the `Taskfile.yml` (these ports remain static unless modified in the configuration):
+
+* **Prometheus UI**: `9090` (`task prometheus-ui`)
+* **Grafana UI**: `3000` (`task monitoring-ui`)
+* **ArgoCD UI**: `8080` (`task gitops-ui`)
+* **MinIO API**: `9000` (`task minio-proxy`)
+* **MinIO Console**: `9001` (`task minio-console`)
+* **Wails Frontend Dev**: `9245`
+
+## GitOps & Security (MinIO Credentials)
+For local testing and development, credentials (like the MinIO root user and password) are stored in plaintext within files such as `gitops/apps/minio.yaml` or `minio-standalone.yaml`. **This is a known practice for local sandboxes but is highly insecure and constitutes a data leak risk in production.**
+
+To securely configure your own instance without leaking data:
+1. **Never commit raw passwords to the repository.**
+2. Retrieve auto-generated cluster secrets when available (e.g., run `task gitops-password` to fetch the auto-generated initial ArgoCD admin password directly from Kubernetes).
+3. For applications like MinIO, implement **Sealed Secrets** (by Bitnami), **SOPS**, or an **External Secrets Operator** (e.g., HashiCorp Vault) to encrypt your secrets before they enter the Git repository.
 
 ---
 
