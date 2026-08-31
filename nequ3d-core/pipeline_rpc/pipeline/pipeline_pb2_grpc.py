@@ -39,12 +39,23 @@ class NtcPipelineServiceStub:
                 request_serializer=pipeline_dot_pipeline__pb2.ProcessModelRequest.SerializeToString,
                 response_deserializer=pipeline_dot_pipeline__pb2.ProcessModelResponse.FromString,
                 _registered_method=True)
+        self.LocateObjects = channel.unary_unary(
+                '/pipeline.NtcPipelineService/LocateObjects',
+                request_serializer=pipeline_dot_pipeline__pb2.LocateRequest.SerializeToString,
+                response_deserializer=pipeline_dot_pipeline__pb2.LocateResponse.FromString,
+                _registered_method=True)
 
 
 class NtcPipelineServiceServicer:
     """Missing associated documentation comment in .proto file."""
 
     def ProcessModel(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def LocateObjects(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -57,6 +68,11 @@ def add_NtcPipelineServiceServicer_to_server(servicer, server):
                     servicer.ProcessModel,
                     request_deserializer=pipeline_dot_pipeline__pb2.ProcessModelRequest.FromString,
                     response_serializer=pipeline_dot_pipeline__pb2.ProcessModelResponse.SerializeToString,
+            ),
+            'LocateObjects': grpc.unary_unary_rpc_method_handler(
+                    servicer.LocateObjects,
+                    request_deserializer=pipeline_dot_pipeline__pb2.LocateRequest.FromString,
+                    response_serializer=pipeline_dot_pipeline__pb2.LocateResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -86,6 +102,33 @@ class NtcPipelineService:
             '/pipeline.NtcPipelineService/ProcessModel',
             pipeline_dot_pipeline__pb2.ProcessModelRequest.SerializeToString,
             pipeline_dot_pipeline__pb2.ProcessModelResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def LocateObjects(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/pipeline.NtcPipelineService/LocateObjects',
+            pipeline_dot_pipeline__pb2.LocateRequest.SerializeToString,
+            pipeline_dot_pipeline__pb2.LocateResponse.FromString,
             options,
             channel_credentials,
             insecure,

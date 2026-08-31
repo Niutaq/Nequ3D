@@ -4,17 +4,22 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
-	pb "changeme/pipeline_rpc"
+	"github.com/minio/minio-go/v7"
+	"github.com/minio/minio-go/v7/pkg/credentials"
+	pb "changeme/pipeline_rpc/pipeline"
+
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
@@ -26,11 +31,11 @@ type App struct{}
 
 // OllamaRequest represents the request payload for the Ollama API
 type OllamaRequest struct {
-	Model  string   `json:"model"`
-	Prompt  string                 `json:"prompt"`
-	Stream  bool                   `json:"stream"`
-	Images  []string               `json:"images,omitempty"`
-	Options map[string]interface{} `json:"options,omitempty"`
+	Model   string         `json:"model"`
+	Prompt  string         `json:"prompt"`
+	Stream  bool           `json:"stream"`
+	Images  []string       `json:"images,omitempty"`
+	Options map[string]any `json:"options,omitempty"`
 }
 
 // OllamaResponse represents the response payload from the Ollama API
@@ -80,7 +85,28 @@ func (a *App) GenerateRenovationAdvice(telemetryJSON string) (string, error) {
 	ntcBypassed, _ := telemetryMap["ntc_bypassed"].(bool)
 	vramReductionStr, _ := telemetryMap["vram_reduction"].(string)
 	if vramReductionStr == "" {
-		vramReductionStr = "0%"
+		if files, ok := telemetryMap["ntc_compressed_files"].([]any); ok {
+			var total float64
+			var count int
+			for _, f := range files {
+				if fm, ok := f.(map[string]any); ok {
+					if vramRed, ok := fm["vram_reduction"].(string); ok {
+						vramRed = strings.ReplaceAll(vramRed, "%", "")
+						if val, err := strconv.ParseFloat(vramRed, 64); err == nil {
+							total += val
+							count++
+						}
+					}
+				}
+			}
+			if count > 0 {
+				vramReductionStr = fmt.Sprintf("%.1f%%", total/float64(count))
+			} else {
+				vramReductionStr = "0%"
+			}
+		} else {
+			vramReductionStr = "0%"
+		}
 	}
 
 	compressionStr := "NTC Compression: Active. VRAM Reduction: " + vramReductionStr
@@ -124,7 +150,10 @@ JSON DATA:
 		Model:   model,
 		Prompt:  prompt,
 		Stream:  true, // Switched to streaming
-		Options: map[string]interface{}{"num_ctx": 16384},
+		Options: map[string]any{
+			"num_ctx": 16384,
+			"temperature": 0.0,
+		},
 	}
 
 	if imageBase64 != "" {
@@ -154,13 +183,31 @@ JSON DATA:
 
 	scanner := bufio.NewScanner(resp.Body)
 	var fullResponse strings.Builder
+	var started bool
 
 	for scanner.Scan() {
 		line := scanner.Bytes()
 		var ollamaResp OllamaResponse
 		if err := json.Unmarshal(line, &ollamaResp); err == nil {
-			fullResponse.WriteString(ollamaResp.Response)
-			application.Get().Event.Emit("llmToken", ollamaResp.Response)
+			token := ollamaResp.Response
+			
+			if !started {
+				fullResponse.WriteString(token)
+				currentStr := fullResponse.String()
+				// Trim leading garbage (allow letters, numbers, dash, asterisk)
+				trimmed := strings.TrimLeftFunc(currentStr, func(r rune) bool {
+					return r != '-' && r != '*' && (r < 'A' || r > 'Z') && (r < 'a' || r > 'z') && (r < '0' || r > '9')
+				})
+				if len(trimmed) > 0 {
+					started = true
+					fullResponse.Reset()
+					fullResponse.WriteString(trimmed)
+					application.Get().Event.Emit("llmToken", trimmed)
+				}
+			} else {
+				fullResponse.WriteString(token)
+				application.Get().Event.Emit("llmToken", token)
+			}
 		}
 	}
 
@@ -225,12 +272,8 @@ func sanitizeOllamaModel(model string) string {
 }
 
 func timeoutForModel(model string) time.Duration {
-	switch model {
-	case "llama3", "llama3:8b", "mistral", "mistral:7b":
-		return 6 * time.Minute
-	default:
-		return 2 * time.Minute
-	}
+	// Increased timeout to 15 minutes for all models to prevent context deadline exceeded
+	return 15 * time.Minute
 }
 
 func trimForError(body []byte) string {
@@ -311,25 +354,32 @@ func (a *App) ProcessModel(absolutePath string, bpp string, steps string) (strin
 		steps = "150"
 	}
 
-	// 1. FAST TRACK: If WebGL format (GLB/GLTF), bypass Core processing
+	// If we are given a .glb, check if a .usdz version exists alongside it (e.g. from Sketchfab download)
 	ext := strings.ToLower(filepath.Ext(absolutePath))
 	if ext == ".glb" || ext == ".gltf" {
-		proxyResponse, err := json.Marshal(map[string]any{
-			"status":               "proxy_mode",
-			"message":              "WebGL format loaded (GLB/GLTF).",
-			"details":              "Bypassed OpenUSD Core Analysis. Displaying 3D proxy viewer.",
-			"file_path":            absolutePath,
-			"proxy_glb_path":       absolutePath,
-			"ntc_bypassed":         true,
-			"ntc_bypass_reason":    "GLB/GLTF proxy mode does not run the USD texture compression pipeline.",
-			"has_ntc_quality":      false,
-			"ntc_compressed_files": []any{},
-		})
-		if err != nil {
-			return "", fmt.Errorf("failed to marshal proxy telemetry: %v", err)
+		usdzPath := strings.TrimSuffix(absolutePath, ext) + ".usdz"
+		if _, err := os.Stat(usdzPath); err == nil {
+			// Found USDZ version, swap to it so we process it in Core instead of bypassing
+			absolutePath = usdzPath
+			ext = ".usdz"
+		} else {
+			// No USDZ found, standard WebGL proxy bypass
+			proxyResponse, err := json.Marshal(map[string]any{
+				"status":               "proxy_mode",
+				"message":              "WebGL format loaded (GLB/GLTF).",
+				"details":              "Bypassed OpenUSD Core Analysis. Displaying 3D proxy viewer.",
+				"file_path":            absolutePath,
+				"proxy_glb_path":       absolutePath,
+				"ntc_bypassed":         true,
+				"ntc_bypass_reason":    "GLB/GLTF proxy mode does not run the USD texture compression pipeline.",
+				"has_ntc_quality":      false,
+				"ntc_compressed_files": []any{},
+			})
+			if err != nil {
+				return "", fmt.Errorf("failed to marshal proxy telemetry: %v", err)
+			}
+			return string(proxyResponse), nil
 		}
-
-		return string(proxyResponse), nil
 	}
 
 	if ext == ".splat" || ext == ".ply" {
@@ -352,8 +402,14 @@ func (a *App) ProcessModel(absolutePath string, bpp string, steps string) (strin
 		return "", fmt.Errorf("unsupported asset format %q", ext)
 	}
 
-	// 2. PRODUCTION PIPELINE: gRPC Call to Python Backend
-	conn, err := grpc.NewClient("localhost:50051", grpc.WithTransportCredentials(insecure.NewCredentials()))
+	// Connect to Python gRPC server (exposed via task run-core on port 50051)
+	conn, err := grpc.NewClient("127.0.0.1:50051", 
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithDefaultCallOptions(
+			grpc.MaxCallRecvMsgSize(100*1024*1024),
+			grpc.MaxCallSendMsgSize(100*1024*1024),
+		),
+	)
 	if err != nil {
 		return "", fmt.Errorf("failed to connect to gRPC server: %v", err)
 	}
@@ -364,8 +420,52 @@ func (a *App) ProcessModel(absolutePath string, bpp string, steps string) (strin
 	bppInt, _ := strconv.Atoi(bpp)
 	stepsInt, _ := strconv.Atoi(steps)
 
+	fileName := filepath.Base(absolutePath)
+	
+	// Upload file to MinIO
+	minioClient, err := minio.New("127.0.0.1:9000", &minio.Options{
+		Creds:  credentials.NewStaticV4("admin", "Nequ3dSecureStore2026!", ""),
+		Secure: false,
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to init MinIO client: %v", err)
+	}
+
+	bucketName := "raw-scans"
+	exists, errBucket := minioClient.BucketExists(context.Background(), bucketName)
+	if errBucket == nil && !exists {
+		err = minioClient.MakeBucket(context.Background(), bucketName, minio.MakeBucketOptions{})
+		if err != nil {
+			fmt.Printf("[Wails Backend] Warning: could not create bucket %s: %v\n", bucketName, err)
+		} else {
+			fmt.Printf("[Wails Backend] Created bucket %s\n", bucketName)
+		}
+	}
+
+	exists, errBucket = minioClient.BucketExists(context.Background(), "processed-models")
+	if errBucket == nil && !exists {
+		err = minioClient.MakeBucket(context.Background(), "processed-models", minio.MakeBucketOptions{})
+		if err != nil {
+			fmt.Printf("[Wails Backend] Warning: could not create bucket processed-models: %v\n", err)
+		} else {
+			fmt.Printf("[Wails Backend] Created bucket processed-models\n")
+		}
+	}
+
+	objectKey := fmt.Sprintf("%d-%s", time.Now().Unix(), fileName)
+	
+	fmt.Printf("[Wails Backend] Uploading %s to MinIO (bucket: %s, key: %s)...\n", fileName, bucketName, objectKey)
+	_, err = minioClient.FPutObject(context.Background(), bucketName, objectKey, absolutePath, minio.PutObjectOptions{})
+	if err != nil {
+		return "", fmt.Errorf("failed to upload to MinIO: %v", err)
+	}
+	fmt.Printf("[Wails Backend] Upload to MinIO complete!\n")
+
+
+
 	req := &pb.ProcessModelRequest{
-		AbsolutePath:  absolutePath,
+		FileName:      fileName,
+		S3ObjectKey:   objectKey,
 		TargetBitrate: int32(bppInt),
 		TrainingSteps: int32(stepsInt),
 	}
@@ -386,7 +486,7 @@ func (a *App) ProcessModel(absolutePath string, bpp string, steps string) (strin
 			break
 		}
 		if err != nil {
-			return "", fmt.Errorf("błąd strumieniowania gRPC: %v", err)
+			return "", fmt.Errorf("error receiving gRPC stream: %v", err)
 		}
 
 		switch update.UpdateType {
@@ -398,12 +498,33 @@ func (a *App) ProcessModel(absolutePath string, bpp string, steps string) (strin
 			return "", fmt.Errorf("pipeline error: %s", update.Message)
 		case "result":
 			jsonResult = update.TelemetryJson
+			
+			if update.ProxyGlbS3Key != "" {
+				tempFile, err := os.CreateTemp("", "proxy_*.glb")
+				if err == nil {
+					tempFile.Close() // Close it so MinIO can write to it via FGetObject
+					err = minioClient.FGetObject(context.Background(), "processed-models", update.ProxyGlbS3Key, tempFile.Name(), minio.GetObjectOptions{})
+					if err == nil {
+						var telemetryMap map[string]any
+						if err := json.Unmarshal([]byte(jsonResult), &telemetryMap); err == nil {
+							telemetryMap["proxy_glb_path"] = tempFile.Name()
+							if updatedJson, err := json.Marshal(telemetryMap); err == nil {
+								jsonResult = string(updatedJson)
+							}
+						}
+					} else {
+						fmt.Printf("[Wails Backend] Warning: failed to download proxy GLB from MinIO: %v\n", err)
+					}
+				}
+			}
 		}
 	}
 
 	if jsonResult == "" || jsonResult == "{}" {
 		return "", fmt.Errorf("pipeline executed successfully but returned no JSON telemetry")
 	}
+
+	fmt.Printf("[Wails Backend] Successfully received telemetry for %s. Processing finished.\n", fileName)
 
 	return jsonResult, nil
 }
@@ -432,4 +553,207 @@ func (a *App) SelectFile() (string, error) {
 	}
 
 	return path, nil
+}
+
+// LocateObjects sends a snapshot and prompt to the Python Backend for object detection
+func (a *App) LocateObjects(imageBase64 string, prompt string) (string, error) {
+	conn, err := grpc.NewClient("nequ3d.local:80", 
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithDefaultCallOptions(
+			grpc.MaxCallRecvMsgSize(100*1024*1024),
+			grpc.MaxCallSendMsgSize(100*1024*1024),
+		),
+	)
+	if err != nil {
+		return "", fmt.Errorf("failed to connect to gRPC server: %v", err)
+	}
+	defer conn.Close()
+
+	client := pb.NewNtcPipelineServiceClient(conn)
+
+	// Remove data:image/png;base64, prefix if present
+	idx := strings.Index(imageBase64, ",")
+	if idx != -1 {
+		imageBase64 = imageBase64[idx+1:]
+	}
+
+	imageData, err := base64.StdEncoding.DecodeString(imageBase64)
+	if err != nil {
+		return "", fmt.Errorf("failed to decode image base64: %v", err)
+	}
+
+	req := &pb.LocateRequest{
+		ImageData: imageData,
+		Prompt:    prompt,
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	resp, err := client.LocateObjects(ctx, req)
+	if err != nil {
+		return "", fmt.Errorf("gRPC LocateObjects failed: %v", err)
+	}
+
+	jsonResp, err := json.Marshal(resp)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal response: %v", err)
+	}
+
+	return string(jsonResp), nil
+}
+
+// Sketchfab error codes understood by the frontend i18n layer.
+// The frontend maps these to localized, user-friendly messages.
+const (
+	ErrSketchfabNetwork     = "SKETCHFAB_NETWORK"
+	ErrSketchfabRequest     = "SKETCHFAB_REQUEST"
+	ErrSketchfabInvalidTok  = "SKETCHFAB_INVALID_TOKEN"
+	ErrSketchfabForbidden   = "SKETCHFAB_FORBIDDEN"
+	ErrSketchfabNotFound    = "SKETCHFAB_NOT_FOUND"
+	ErrSketchfabRateLimit   = "SKETCHFAB_RATE_LIMIT"
+	ErrSketchfabServer      = "SKETCHFAB_SERVER"
+	ErrSketchfabParse       = "SKETCHFAB_PARSE"
+	ErrSketchfabNoUsdz      = "SKETCHFAB_NO_USDZ"
+	ErrSketchfabNoGlb       = "SKETCHFAB_NO_GLB"
+	ErrSketchfabDownload    = "SKETCHFAB_DOWNLOAD"
+)
+
+// sketchfabErr wraps an error with a stable machine-readable code that the
+// frontend can translate into the user's current language.
+type sketchfabErr struct {
+	Code string
+	Msg  string
+}
+
+func (e *sketchfabErr) Error() string { return e.Code + ": " + e.Msg }
+
+// statusToSketchfabCode maps a Sketchfab HTTP status to a stable error code.
+func statusToSketchfabCode(status int) string {
+	switch status {
+	case http.StatusUnauthorized:
+		return ErrSketchfabInvalidTok
+	case http.StatusForbidden:
+		return ErrSketchfabForbidden
+	case http.StatusNotFound:
+		return ErrSketchfabNotFound
+	case http.StatusTooManyRequests:
+		return ErrSketchfabRateLimit
+	case 500, 502, 503, 504:
+		return ErrSketchfabServer
+	default:
+		return ErrSketchfabRequest
+	}
+}
+
+func extractSketchfabUID(input string) string {
+	if strings.Contains(input, "sketchfab.com/3d-models/") {
+		parts := strings.Split(input, "-")
+		if len(parts) > 0 {
+			return parts[len(parts)-1]
+		}
+	}
+	return input
+}
+
+func (a *App) DownloadFromSketchfab(uid string, token string) (string, error) {
+	uid = extractSketchfabUID(uid)
+
+	req, err := http.NewRequest("GET", "https://api.sketchfab.com/v3/models/"+uid+"/download", nil)
+	if err != nil {
+		return "", &sketchfabErr{Code: ErrSketchfabRequest, Msg: err.Error()}
+	}
+	req.Header.Set("Authorization", "Token "+token)
+
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", &sketchfabErr{Code: ErrSketchfabNetwork, Msg: err.Error()}
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		// Respect the Sketchfab detail (e.g. "You do not have permission...")
+		// but let the frontend decide the user-facing text.
+		detail := parseSketchfabDetail(body)
+		resp.Body.Close()
+		return "", &sketchfabErr{Code: statusToSketchfabCode(resp.StatusCode), Msg: detail}
+	}
+	defer resp.Body.Close()
+
+	var data struct {
+		Usdz struct {
+			Url string `json:"url"`
+		} `json:"usdz"`
+		Glb struct {
+			Url string `json:"url"`
+		} `json:"glb"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		return "", &sketchfabErr{Code: ErrSketchfabParse, Msg: err.Error()}
+	}
+
+	if data.Usdz.Url == "" {
+		return "", &sketchfabErr{Code: ErrSketchfabNoUsdz, Msg: "no USDZ"}
+	}
+	if data.Glb.Url == "" {
+		return "", &sketchfabErr{Code: ErrSketchfabNoGlb, Msg: "no GLB"}
+	}
+
+	downloadClient := &http.Client{Timeout: 5 * time.Minute}
+	cwd, _ := os.Getwd()
+	downloadsDir := filepath.Join(cwd, "..", "data", "downloads")
+	os.MkdirAll(downloadsDir, 0755)
+
+	// Download USDZ
+	usdzReq, err := http.NewRequest("GET", data.Usdz.Url, nil)
+	if err != nil { return "", &sketchfabErr{Code: ErrSketchfabDownload, Msg: err.Error()} }
+	usdzResp, err := downloadClient.Do(usdzReq)
+	if err != nil { return "", &sketchfabErr{Code: ErrSketchfabDownload, Msg: err.Error()} }
+	defer usdzResp.Body.Close()
+	
+	if usdzResp.StatusCode != http.StatusOK {
+		return "", &sketchfabErr{Code: ErrSketchfabDownload, Msg: fmt.Sprintf("USDZ status %d", usdzResp.StatusCode)}
+	}
+	usdzPath := filepath.Join(downloadsDir, uid+".usdz")
+	usdzOut, err := os.Create(usdzPath)
+	if err != nil { return "", &sketchfabErr{Code: ErrSketchfabDownload, Msg: err.Error()} }
+	io.Copy(usdzOut, usdzResp.Body)
+	usdzOut.Close()
+
+	// Download GLB for Preview
+	glbReq, err := http.NewRequest("GET", data.Glb.Url, nil)
+	if err != nil { return "", &sketchfabErr{Code: ErrSketchfabDownload, Msg: err.Error()} }
+	glbResp, err := downloadClient.Do(glbReq)
+	if err != nil { return "", &sketchfabErr{Code: ErrSketchfabDownload, Msg: err.Error()} }
+	defer glbResp.Body.Close()
+
+	if glbResp.StatusCode != http.StatusOK {
+		return "", &sketchfabErr{Code: ErrSketchfabDownload, Msg: fmt.Sprintf("GLB status %d", glbResp.StatusCode)}
+	}
+	glbPath := filepath.Join(downloadsDir, uid+".glb")
+	glbOut, err := os.Create(glbPath)
+	if err != nil { return "", &sketchfabErr{Code: ErrSketchfabDownload, Msg: err.Error()} }
+	io.Copy(glbOut, glbResp.Body)
+	glbOut.Close()
+
+	return glbPath, nil
+}
+
+// parseSketchfabDetail extracts the human-readable "detail" field from a
+// Sketchfab error JSON body, falling back to the raw body when absent.
+func parseSketchfabDetail(body []byte) string {
+	var v struct {
+		Detail string `json:"detail"`
+	}
+	if err := json.Unmarshal(body, &v); err == nil && v.Detail != "" {
+		return v.Detail
+	}
+	// Sketchfab sometimes returns an HTML error page instead of JSON.
+	// Do not leak raw HTML to the user — return a neutral fallback.
+	t := bytes.TrimSpace(body)
+	if len(t) > 0 && t[0] == '<' {
+		return "Sketchfab returned an HTML error page"
+	}
+	return string(body)
 }

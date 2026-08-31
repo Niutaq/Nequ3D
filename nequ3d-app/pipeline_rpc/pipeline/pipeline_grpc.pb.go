@@ -19,7 +19,8 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	NtcPipelineService_ProcessModel_FullMethodName = "/pipeline.NtcPipelineService/ProcessModel"
+	NtcPipelineService_ProcessModel_FullMethodName  = "/pipeline.NtcPipelineService/ProcessModel"
+	NtcPipelineService_LocateObjects_FullMethodName = "/pipeline.NtcPipelineService/LocateObjects"
 )
 
 // NtcPipelineServiceClient is the client API for NtcPipelineService service.
@@ -27,6 +28,7 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type NtcPipelineServiceClient interface {
 	ProcessModel(ctx context.Context, in *ProcessModelRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ProcessModelResponse], error)
+	LocateObjects(ctx context.Context, in *LocateRequest, opts ...grpc.CallOption) (*LocateResponse, error)
 }
 
 type ntcPipelineServiceClient struct {
@@ -56,11 +58,22 @@ func (c *ntcPipelineServiceClient) ProcessModel(ctx context.Context, in *Process
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type NtcPipelineService_ProcessModelClient = grpc.ServerStreamingClient[ProcessModelResponse]
 
+func (c *ntcPipelineServiceClient) LocateObjects(ctx context.Context, in *LocateRequest, opts ...grpc.CallOption) (*LocateResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(LocateResponse)
+	err := c.cc.Invoke(ctx, NtcPipelineService_LocateObjects_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // NtcPipelineServiceServer is the server API for NtcPipelineService service.
 // All implementations must embed UnimplementedNtcPipelineServiceServer
 // for forward compatibility.
 type NtcPipelineServiceServer interface {
 	ProcessModel(*ProcessModelRequest, grpc.ServerStreamingServer[ProcessModelResponse]) error
+	LocateObjects(context.Context, *LocateRequest) (*LocateResponse, error)
 	mustEmbedUnimplementedNtcPipelineServiceServer()
 }
 
@@ -73,6 +86,9 @@ type UnimplementedNtcPipelineServiceServer struct{}
 
 func (UnimplementedNtcPipelineServiceServer) ProcessModel(*ProcessModelRequest, grpc.ServerStreamingServer[ProcessModelResponse]) error {
 	return status.Error(codes.Unimplemented, "method ProcessModel not implemented")
+}
+func (UnimplementedNtcPipelineServiceServer) LocateObjects(context.Context, *LocateRequest) (*LocateResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method LocateObjects not implemented")
 }
 func (UnimplementedNtcPipelineServiceServer) mustEmbedUnimplementedNtcPipelineServiceServer() {}
 func (UnimplementedNtcPipelineServiceServer) testEmbeddedByValue()                            {}
@@ -106,13 +122,36 @@ func _NtcPipelineService_ProcessModel_Handler(srv interface{}, stream grpc.Serve
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type NtcPipelineService_ProcessModelServer = grpc.ServerStreamingServer[ProcessModelResponse]
 
+func _NtcPipelineService_LocateObjects_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(LocateRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(NtcPipelineServiceServer).LocateObjects(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: NtcPipelineService_LocateObjects_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(NtcPipelineServiceServer).LocateObjects(ctx, req.(*LocateRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // NtcPipelineService_ServiceDesc is the grpc.ServiceDesc for NtcPipelineService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
 var NtcPipelineService_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "pipeline.NtcPipelineService",
 	HandlerType: (*NtcPipelineServiceServer)(nil),
-	Methods:     []grpc.MethodDesc{},
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "LocateObjects",
+			Handler:    _NtcPipelineService_LocateObjects_Handler,
+		},
+	},
 	Streams: []grpc.StreamDesc{
 		{
 			StreamName:    "ProcessModel",

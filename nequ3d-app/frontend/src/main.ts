@@ -4,6 +4,7 @@ import {
   GenerateRenovationAdvice,
   ProcessModel,
   SelectFile,
+  DownloadFromSketchfab
 } from "../bindings/changeme/app";
 import "@google/model-viewer";
 import { Events } from "@wailsio/runtime";
@@ -45,7 +46,9 @@ type PipelineTelemetry = {
   [key: string]: unknown;
 };
 
-const LOCAL_FILE_ENDPOINT = "http://localhost:8081/api/local-file?path=";
+// Fallback used only until the backend publishes the dynamically-assigned
+// local-file server URL via the "localServerUrl" event.
+let LOCAL_FILE_ENDPOINT = "http://localhost:9387/api/local-file?path=";
 const MIN_LEFT_PANEL = 280;
 const MIN_RIGHT_PANEL = 300;
 const MIN_CENTER_PANEL = 420;
@@ -329,9 +332,9 @@ function initUI(): void {
             <button id="btn-lang-pl" class="view-tab">PL</button>
           </div>
           <div class="segmented text-scale-control">
-            <button id="btn-size-sm" class="view-tab" data-i18n-title="sizeSmall" data-i18n-aria="sizeSmall">A-</button>
-            <button id="btn-size-md" class="view-tab" data-i18n-title="sizeMedium" data-i18n-aria="sizeMedium">A</button>
-            <button id="btn-size-lg" class="view-tab" data-i18n-title="sizeLarge" data-i18n-aria="sizeLarge">A+</button>
+            <button id="btn-size-sm" class="view-tab" style="font-size: 0.75rem; font-weight: bold;" data-i18n-title="sizeSmall" data-i18n-aria="sizeSmall">A-</button>
+            <button id="btn-size-md" class="view-tab" style="font-size: 0.95rem; font-weight: bold;" data-i18n-title="sizeMedium" data-i18n-aria="sizeMedium">A</button>
+            <button id="btn-size-lg" class="view-tab" style="font-size: 1.15rem; font-weight: bold;" data-i18n-title="sizeLarge" data-i18n-aria="sizeLarge">A+</button>
           </div>
           <button id="theme-toggle" class="technical-button" style="padding: 0; width: 44px; height: 44px; display: grid; place-items: center;" data-i18n-title="themeToggle">${Icons.moon}</button>
         </div>
@@ -344,6 +347,19 @@ function initUI(): void {
             ${Icons.folder}
             <span data-i18n="loadAssetBtn"></span>
           </button>
+          
+          <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 12px; padding: 12px; background: linear-gradient(145deg, var(--bg-darker) 0%, rgba(13, 148, 136, 0.08) 100%); border: 1px solid var(--accent-teal); border-radius: 6px;">
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <span class="section-label" style="border: none; padding: 0; color: var(--accent-teal); font-weight: bold; letter-spacing: 0.1em;">SKETCHFAB (USDZ)</span>
+            </div>
+            <input type="text" id="sketchfab-url" data-i18n-placeholder="sketchfabUrl" placeholder="Model URL or UID" class="technical-select" style="padding: 8px; font-size: 0.65rem; border: 1px solid rgba(13, 148, 136, 0.3);">
+            <input type="password" id="sketchfab-token" data-i18n-placeholder="sketchfabToken" placeholder="API Token" class="technical-select" style="padding: 8px; font-size: 0.65rem; border: 1px solid rgba(13, 148, 136, 0.3);">
+            <button id="sketchfab-btn" class="technical-button primary" style="font-weight: bold; padding: 12px;">
+              <span data-i18n="loadSketchfabBtn">Pobierz i Analizuj</span>
+            </button>
+            <div id="sketchfab-status" style="font-size: 0.6rem; color: var(--text-muted); font-family: var(--font-mono); text-align: center; margin-top: 4px; word-wrap: break-word;"></div>
+          </div>
+          
           <div id="file-path" class="telemetry-label" style="text-transform: none; word-break: break-all; margin-top: 6px;" data-i18n="noFile"></div>
         </div>
 
@@ -356,7 +372,7 @@ function initUI(): void {
           <input type="range" id="bpp-slider" min="1" max="8" step="1" value="5">
 
           <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 8px;">
-            <span class="telemetry-label">Training Steps</span>
+            <span class="telemetry-label" data-i18n="trainingSteps"></span>
             <span id="steps-val" class="telemetry-value" style="font-size: 0.8rem; color: var(--accent-teal);"></span>
           </div>
           <input type="range" id="steps-slider" min="50" max="1000" step="50" value="150">
@@ -471,12 +487,13 @@ function attachEventListeners(): void {
   const analyzeBtn = getEl<HTMLButtonElement>("analyze-btn");
 
   Events.On("pipelineLog", (ev: any) => {
-    const outputPre = getEl<HTMLElement>("output");
     // Wails v3 event data is usually ev.data[0]
-    const message = ev.data && ev.data.length > 0 ? ev.data[0] : String(ev);
-    outputPre.innerHTML = `<div style="padding:20px; font-family:var(--font-mono); color:var(--accent-teal); font-size:1.1rem; display:flex; align-items:center; gap:12px;">
-      <div class="spinner"></div> <span>${message}</span>
-    </div>`;
+    const rawMessage = ev.data && ev.data.length > 0 ? ev.data[0] : String(ev);
+
+    // Tymczasowo wyłączone wyświetlanie logów Dockera z powodu krzaków
+    // outputPre.innerHTML = `<div style="padding:20px; font-family:var(--font-mono); color:var(--accent-teal); font-size:1.1rem; display:flex; align-items:center; gap:12px;">
+    //  <div class="spinner"></div> <span>${rawMessage}</span>
+    // </div>`;
   });
   const divider = getEl<HTMLDivElement>("comp-divider");
   const compLayer = getEl<HTMLDivElement>("comparison-layer");
@@ -523,6 +540,7 @@ function attachEventListeners(): void {
     updateViewerOrientations();
   });
 
+
   getEl<HTMLInputElement>("bpp-slider").addEventListener("input", (event) => {
     currentBpp = (event.target as HTMLInputElement).value;
     updateBppLabel();
@@ -567,6 +585,19 @@ function attachEventListeners(): void {
   });
 
   try {
+    Events.On("localServerUrl", (event: unknown) => {
+      const data = (event as any)?.data;
+      const url = Array.isArray(data) ? data[0] : data;
+      if (typeof url === "string" && url.length > 0 && LOCAL_FILE_ENDPOINT !== url) {
+        LOCAL_FILE_ENDPOINT = url;
+        // The local-file server may have started after the user already
+        // picked a mesh (dynamic port race). Re-render the preview so the
+        // model actually shows.
+        if (currentAbsolutePath && isMeshRenderable(currentAbsolutePath)) {
+          previewMeshAsset(currentAbsolutePath);
+        }
+      }
+    });
     Events.On("sysStats", (event: unknown) => {
       const stats = normalizeStatsEvent(event);
       if (stats) updateSystemStats(stats);
@@ -579,6 +610,39 @@ function attachEventListeners(): void {
     const path = await SelectFile();
     if (!path) return;
     await routeSelectedAsset(path);
+  });
+
+  const sketchfabBtn = getEl<HTMLButtonElement>("sketchfab-btn");
+  const sketchfabStatus = getEl<HTMLDivElement>("sketchfab-status");
+  sketchfabBtn.addEventListener("click", async () => {
+    const urlInput = getEl<HTMLInputElement>("sketchfab-url").value;
+    const tokenInput = getEl<HTMLInputElement>("sketchfab-token").value;
+    if (!urlInput || !tokenInput) {
+        sketchfabStatus.style.color = "red";
+        sketchfabStatus.textContent = IntLayer.t.sketchfabMissing;
+        return;
+    }
+    
+    sketchfabBtn.disabled = true;
+    const oldHtml = sketchfabBtn.innerHTML;
+    sketchfabBtn.innerHTML = `<div class="spinner"></div><span style="font-size: 0.6rem;">${IntLayer.t.sketchfabDownloading}</span>`;
+    sketchfabStatus.style.color = "var(--text-muted)";
+    sketchfabStatus.textContent = IntLayer.t.sketchfabConnecting;
+    
+    try {
+        const path = await DownloadFromSketchfab(urlInput, tokenInput);
+        if (path) {
+            sketchfabStatus.style.color = "var(--accent-teal)";
+            sketchfabStatus.textContent = IntLayer.t.sketchfabSuccess;
+            await routeSelectedAsset(path);
+        }
+    } catch (e) {
+        sketchfabStatus.style.color = "red";
+        sketchfabStatus.textContent = friendlySketchfabError(e);
+    } finally {
+        sketchfabBtn.disabled = false;
+        sketchfabBtn.innerHTML = oldHtml;
+    }
   });
 
   analyzeBtn.addEventListener("click", runAnalysis);
@@ -645,6 +709,25 @@ function initResizablePanels(): void {
 
 function initComparisonResize(): void {
   syncComparisonLayout();
+}
+
+// Maps the backend's machine-readable Sketchfab error code to a localized,
+// user-friendly message. Always returns a complete, self-contained message
+// with the "Error:" prefix applied exactly once (no double-prefix like
+// "Błąd: Błąd"). Unknown/legacy errors fall back to the raw text.
+function friendlySketchfabError(err: unknown): string {
+  const prefix = IntLayer.t.sketchfabError + ": ";
+  const text = String(err);
+  const m = text.match(/(SKETCHFAB_[A-Z_]+)(?::|$)/);
+  if (m) {
+    const key = m[1] as keyof typeof IntLayer.t;
+    const localized = (IntLayer.t as Record<string, string>)[key];
+    if (localized && localized !== IntLayer.t.sketchfabError) {
+      return prefix + localized;
+    }
+  }
+  const cleaned = text.replace("Sketchfab API error (", "").replace("):", "");
+  return prefix + cleaned;
 }
 
 async function runAnalysis(): Promise<void> {
@@ -989,7 +1072,7 @@ async function runAdvice(
     analysis_mode: qualityAvailable ? "mesh_ntc" : "geometry_only",
     ntc_bypassed: !qualityAvailable || Boolean(parsedTelemetry.ntc_bypassed),
     instruction_context: qualityAvailable
-      ? "CRITICAL RULE: NEVER invent, hallucinate, or guess VRAM savings percentages (e.g., 0% or 84.4%). You MUST ONLY report the exact VRAM reduction values explicitly present in the provided JSON telemetry. If the JSON lacks these values, do NOT make them up. Discuss mesh geometry and NTC texture compression accurately based ONLY on the data."
+      ? "CRITICAL RULE: You MUST ONLY report the exact VRAM reduction values explicitly present in the provided JSON telemetry (e.g. in the 'vram_reduction' field). If the JSON lacks these values, do NOT make them up. Discuss mesh geometry and NTC texture compression accurately based ONLY on the data."
       : "CRITICAL RULE: Focus purely on mesh geometry and structure. Do NOT mention or claim any NTC VRAM savings because NTC was bypassed. NEVER guess or hallucinate VRAM values.",
     telemetry: parsedTelemetry,
     raw_telemetry: rawTelemetry,
@@ -1148,7 +1231,14 @@ function updateSystemStats(stats: SysStats): void {
 }
 
 function parseTelemetry(raw: string): PipelineTelemetry {
-  const parsed = JSON.parse(raw) as PipelineTelemetry;
+  // Usuwamy absolutnie wszystko co jest ANSI i carriage returns
+  const cleanRaw = raw
+    .replace(
+      /[\u001b\u009b][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><]/g,
+      "",
+    )
+    .replace(/\r/g, "");
+  const parsed = JSON.parse(cleanRaw) as PipelineTelemetry;
   return parsed;
 }
 
@@ -1189,8 +1279,8 @@ function localFileUrl(path: string): string {
 function toHostPath(path: string): string {
   if (!path) return "";
   const trimmed = path.replace(/^file:\/\//i, "");
-  const workspacePrefix = "/workspace/";
-  const windowsWorkspacePrefix = "\\workspace\\";
+  const workspacePrefix = "/tmp/workspace/";
+  const windowsWorkspacePrefix = "\\tmp\\workspace\\";
 
   if (trimmed.startsWith(workspacePrefix)) {
     return `${currentModelDir}${trimmed

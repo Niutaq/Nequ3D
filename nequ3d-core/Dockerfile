@@ -6,6 +6,7 @@ FROM nvidia/cuda:12.6.0-devel-ubuntu24.04
 
 # Disable interactive prompts during apt-get
 ENV DEBIAN_FRONTEND=noninteractive
+ENV PIP_BREAK_SYSTEM_PACKAGES=1
 
 # 1. Install system dependencies
 RUN apt-get update && apt-get install -y \
@@ -41,5 +42,7 @@ RUN ln -s /opt/RTXNTC/bin/linux-x64/ntc-cli /usr/local/bin/ntc-cli
 WORKDIR /app
 COPY . /app/
 
-# Standby execution state
-CMD ["/bin/bash"]
+RUN pip3 install -r requirements.txt
+
+# Start the gRPC server
+CMD ["python3", "-u", "rpc_server.py"]
