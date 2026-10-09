@@ -1,14 +1,14 @@
 # OpenUSD Edge-to-Core Asset Pipeline & Analytics Showcase
 
 <div align="center">
-  <img src="logo.jpg" alt="Nequ3D Logo" width="300" />
-</div>
+  <img width="500" height="500" alt="logo" src="https://github.com/user-attachments/assets/257868db-f8fc-4060-a200-1de4a688280c" />
 
 [![Docker](https://img.shields.io/badge/Docker-Required-2496ED?logo=docker\&logoColor=white)](https://www.docker.com/)
 [![Wails](https://img.shields.io/badge/Wails-v3-orange)](https://v3alpha.wails.io/)
 [![OpenUSD](https://img.shields.io/badge/OpenUSD-NVIDIA-success)](https://openusd.org/)
 [![Go](https://img.shields.io/badge/Go-1.24+-00ADD8?logo=go)](https://go.dev/)
 [![Python](https://img.shields.io/badge/Python-3.12+-3776AB?logo=python\&logoColor=white)](https://www.python.org/)
+</div>
 
 Processing pipeline designed for mobile mapping and reality capture telemetry, leveraging Go, Python, and NVIDIA Omniverse technologies (OpenUSD + RTX Neural Texture Compression).
 
