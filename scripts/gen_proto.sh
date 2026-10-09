@@ -60,11 +60,11 @@ echo "Generating code for Go..."
 echo "Go code generation successful! Output in: $OUTPUT_DIR"
 
 echo "Installing dependencies and generating code for Python..."
-PY_OUTPUT_DIR="$PROJECT_ROOT/processing/pipeline_rpc"
+PY_OUTPUT_DIR="$PROJECT_ROOT/nequ3d-core/pipeline_rpc"
 mkdir -p "$PY_OUTPUT_DIR"
 touch "$PY_OUTPUT_DIR/__init__.py"
 
-VENV_PYTHON="$PROJECT_ROOT/processing/venv/bin/python"
+VENV_PYTHON="$PROJECT_ROOT/nequ3d-core/venv/bin/python"
 if [ ! -f "$VENV_PYTHON" ]; then
     VENV_PYTHON="python3"
 fi

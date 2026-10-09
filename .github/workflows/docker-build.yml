@@ -4,12 +4,13 @@ on:
   push:
     branches: ["main", "develop"]
     paths:
-      - "processing/**"
+      - "nequ3d-core/**"
       - ".github/workflows/docker-build.yml"
   pull_request:
     branches: ["main"]
 
 env:
+  ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}-core
 
@@ -43,7 +44,7 @@ jobs:
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
-          context: ./processing
+          context: ./nequ3d-core
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

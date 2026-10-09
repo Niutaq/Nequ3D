@@ -603,6 +603,49 @@ func (a *App) LocateObjects(imageBase64 string, prompt string) (string, error) {
 	return string(jsonResp), nil
 }
 
+// Sketchfab error codes understood by the frontend i18n layer.
+// The frontend maps these to localized, user-friendly messages.
+const (
+	ErrSketchfabNetwork     = "SKETCHFAB_NETWORK"
+	ErrSketchfabRequest     = "SKETCHFAB_REQUEST"
+	ErrSketchfabInvalidTok  = "SKETCHFAB_INVALID_TOKEN"
+	ErrSketchfabForbidden   = "SKETCHFAB_FORBIDDEN"
+	ErrSketchfabNotFound    = "SKETCHFAB_NOT_FOUND"
+	ErrSketchfabRateLimit   = "SKETCHFAB_RATE_LIMIT"
+	ErrSketchfabServer      = "SKETCHFAB_SERVER"
+	ErrSketchfabParse       = "SKETCHFAB_PARSE"
+	ErrSketchfabNoUsdz      = "SKETCHFAB_NO_USDZ"
+	ErrSketchfabNoGlb       = "SKETCHFAB_NO_GLB"
+	ErrSketchfabDownload    = "SKETCHFAB_DOWNLOAD"
+)
+
+// sketchfabErr wraps an error with a stable machine-readable code that the
+// frontend can translate into the user's current language.
+type sketchfabErr struct {
+	Code string
+	Msg  string
+}
+
+func (e *sketchfabErr) Error() string { return e.Code + ": " + e.Msg }
+
+// statusToSketchfabCode maps a Sketchfab HTTP status to a stable error code.
+func statusToSketchfabCode(status int) string {
+	switch status {
+	case http.StatusUnauthorized:
+		return ErrSketchfabInvalidTok
+	case http.StatusForbidden:
+		return ErrSketchfabForbidden
+	case http.StatusNotFound:
+		return ErrSketchfabNotFound
+	case http.StatusTooManyRequests:
+		return ErrSketchfabRateLimit
+	case 500, 502, 503, 504:
+		return ErrSketchfabServer
+	default:
+		return ErrSketchfabRequest
+	}
+}
+
 func extractSketchfabUID(input string) string {
 	if strings.Contains(input, "sketchfab.com/3d-models/") {
 		parts := strings.Split(input, "-")
@@ -618,21 +661,25 @@ func (a *App) DownloadFromSketchfab(uid string, token string) (string, error) {
 
 	req, err := http.NewRequest("GET", "https://api.sketchfab.com/v3/models/"+uid+"/download", nil)
 	if err != nil {
-		return "", err
+		return "", &sketchfabErr{Code: ErrSketchfabRequest, Msg: err.Error()}
 	}
 	req.Header.Set("Authorization", "Token "+token)
 
 	client := &http.Client{Timeout: 15 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("failed to contact Sketchfab API: %v", err)
+		return "", &sketchfabErr{Code: ErrSketchfabNetwork, Msg: err.Error()}
 	}
-	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("Sketchfab API error (%d): %s", resp.StatusCode, string(body))
+		// Respect the Sketchfab detail (e.g. "You do not have permission...")
+		// but let the frontend decide the user-facing text.
+		detail := parseSketchfabDetail(body)
+		resp.Body.Close()
+		return "", &sketchfabErr{Code: statusToSketchfabCode(resp.StatusCode), Msg: detail}
 	}
+	defer resp.Body.Close()
 
 	var data struct {
 		Usdz struct {
@@ -643,14 +690,14 @@ func (a *App) DownloadFromSketchfab(uid string, token string) (string, error) {
 		} `json:"glb"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
-		return "", fmt.Errorf("failed to parse Sketchfab response: %v", err)
+		return "", &sketchfabErr{Code: ErrSketchfabParse, Msg: err.Error()}
 	}
 
 	if data.Usdz.Url == "" {
-		return "", fmt.Errorf("Ten model nie posiada formatu USDZ (wymaganego przez NTC).")
+		return "", &sketchfabErr{Code: ErrSketchfabNoUsdz, Msg: "no USDZ"}
 	}
 	if data.Glb.Url == "" {
-		return "", fmt.Errorf("Ten model nie posiada formatu GLB (wymaganego do podglądu).")
+		return "", &sketchfabErr{Code: ErrSketchfabNoGlb, Msg: "no GLB"}
 	}
 
 	downloadClient := &http.Client{Timeout: 5 * time.Minute}
@@ -660,35 +707,53 @@ func (a *App) DownloadFromSketchfab(uid string, token string) (string, error) {
 
 	// Download USDZ
 	usdzReq, err := http.NewRequest("GET", data.Usdz.Url, nil)
-	if err != nil { return "", err }
+	if err != nil { return "", &sketchfabErr{Code: ErrSketchfabDownload, Msg: err.Error()} }
 	usdzResp, err := downloadClient.Do(usdzReq)
-	if err != nil { return "", fmt.Errorf("failed to download USDZ: %v", err) }
+	if err != nil { return "", &sketchfabErr{Code: ErrSketchfabDownload, Msg: err.Error()} }
 	defer usdzResp.Body.Close()
 	
 	if usdzResp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("failed to download USDZ, status code: %d", usdzResp.StatusCode)
+		return "", &sketchfabErr{Code: ErrSketchfabDownload, Msg: fmt.Sprintf("USDZ status %d", usdzResp.StatusCode)}
 	}
 	usdzPath := filepath.Join(downloadsDir, uid+".usdz")
 	usdzOut, err := os.Create(usdzPath)
-	if err != nil { return "", err }
+	if err != nil { return "", &sketchfabErr{Code: ErrSketchfabDownload, Msg: err.Error()} }
 	io.Copy(usdzOut, usdzResp.Body)
 	usdzOut.Close()
 
 	// Download GLB for Preview
 	glbReq, err := http.NewRequest("GET", data.Glb.Url, nil)
-	if err != nil { return "", err }
+	if err != nil { return "", &sketchfabErr{Code: ErrSketchfabDownload, Msg: err.Error()} }
 	glbResp, err := downloadClient.Do(glbReq)
-	if err != nil { return "", fmt.Errorf("failed to download GLB: %v", err) }
+	if err != nil { return "", &sketchfabErr{Code: ErrSketchfabDownload, Msg: err.Error()} }
 	defer glbResp.Body.Close()
 
 	if glbResp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("failed to download GLB, status code: %d", glbResp.StatusCode)
+		return "", &sketchfabErr{Code: ErrSketchfabDownload, Msg: fmt.Sprintf("GLB status %d", glbResp.StatusCode)}
 	}
 	glbPath := filepath.Join(downloadsDir, uid+".glb")
 	glbOut, err := os.Create(glbPath)
-	if err != nil { return "", err }
+	if err != nil { return "", &sketchfabErr{Code: ErrSketchfabDownload, Msg: err.Error()} }
 	io.Copy(glbOut, glbResp.Body)
 	glbOut.Close()
 
 	return glbPath, nil
+}
+
+// parseSketchfabDetail extracts the human-readable "detail" field from a
+// Sketchfab error JSON body, falling back to the raw body when absent.
+func parseSketchfabDetail(body []byte) string {
+	var v struct {
+		Detail string `json:"detail"`
+	}
+	if err := json.Unmarshal(body, &v); err == nil && v.Detail != "" {
+		return v.Detail
+	}
+	// Sketchfab sometimes returns an HTML error page instead of JSON.
+	// Do not leak raw HTML to the user — return a neutral fallback.
+	t := bytes.TrimSpace(body)
+	if len(t) > 0 && t[0] == '<' {
+		return "Sketchfab returned an HTML error page"
+	}
+	return string(body)
 }
