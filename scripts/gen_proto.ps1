@@ -1,5 +1,5 @@
 $ErrorActionPreference = "Stop"
-$ProjectRoot = (Get-Item -Path ".\").FullName
+$ProjectRoot = Split-Path -Parent $PSScriptRoot
 $ToolsDir = "$ProjectRoot\.tools"
 $ProtocExe = "$ToolsDir\bin\protoc.exe"
 
@@ -15,8 +15,10 @@ if (-not (Test-Path $ProtocExe)) {
 }
 
 Write-Host "Installing Go plugins (protoc-gen-go, protoc-gen-go-grpc)..."
-go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
-go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
+go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.12
+if ($LASTEXITCODE -ne 0) { throw "RPC generation command failed (exit $LASTEXITCODE)." }
+go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.2
+if ($LASTEXITCODE -ne 0) { throw "RPC generation command failed (exit $LASTEXITCODE)." }
 
 $GoBin = "$env:USERPROFILE\go\bin"
 if ($env:PATH -notmatch [regex]::Escape($GoBin)) {
@@ -28,6 +30,7 @@ New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
 
 Write-Host "Generating code for Go..."
 & $ProtocExe --proto_path="$ProjectRoot\proto" --go_out="$OutputDir" --go_opt=paths=source_relative --go-grpc_out="$OutputDir" --go-grpc_opt=paths=source_relative "$ProjectRoot\proto\pipeline\pipeline.proto"
+if ($LASTEXITCODE -ne 0) { throw "RPC generation command failed (exit $LASTEXITCODE)." }
 
 Write-Host "Go code generation successful! Output in: $OutputDir"
 
@@ -41,7 +44,9 @@ if (-not (Test-Path $VenvPython)) {
     $VenvPython = "python"
 }
 
-& $VenvPython -m pip install grpcio-tools
+& $VenvPython -m pip install grpcio-tools==1.81.1 protobuf==6.33.6
+if ($LASTEXITCODE -ne 0) { throw "RPC generation command failed (exit $LASTEXITCODE)." }
 & $VenvPython -m grpc_tools.protoc -I="$ProjectRoot\proto" --python_out="$PyOutputDir" --grpc_python_out="$PyOutputDir" "$ProjectRoot\proto\pipeline\pipeline.proto"
+if ($LASTEXITCODE -ne 0) { throw "RPC generation command failed (exit $LASTEXITCODE)." }
 
 Write-Host "All done! gRPC packages for Go and Python are updated."

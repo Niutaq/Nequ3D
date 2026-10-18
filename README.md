@@ -1,269 +1,135 @@
-# OpenUSD Edge-to-Core Asset Pipeline & Analytics Showcase
+# Nequ3D — OpenUSD Edge-to-Core Pipeline
 
 <div align="center">
-  <img width="500" height="500" alt="logo" src="https://github.com/user-attachments/assets/257868db-f8fc-4060-a200-1de4a688280c" />
-
-[![Docker](https://img.shields.io/badge/Docker-Required-2496ED?logo=docker\&logoColor=white)](https://www.docker.com/)
-[![Wails](https://img.shields.io/badge/Wails-v3-orange)](https://v3alpha.wails.io/)
-[![OpenUSD](https://img.shields.io/badge/OpenUSD-NVIDIA-success)](https://openusd.org/)
-[![Go](https://img.shields.io/badge/Go-1.24+-00ADD8?logo=go)](https://go.dev/)
-[![Python](https://img.shields.io/badge/Python-3.12+-3776AB?logo=python\&logoColor=white)](https://www.python.org/)
+  <img width="500" height="500" alt="Nequ3D logo" src="https://github.com/user-attachments/assets/257868db-f8fc-4060-a200-1de4a688280c" />
 </div>
 
-Processing pipeline designed for mobile mapping and reality capture telemetry, leveraging Go, Python, and NVIDIA Omniverse technologies (OpenUSD + RTX Neural Texture Compression).
+Nequ3D is a research application for inspecting captured 3D assets, processing OpenUSD scenes, measuring GPU telemetry, and compressing UV textures with NVIDIA RTX Neural Texture Compression (NTC). The desktop interface supports English and Polish. Local AI reports use Ollama.
 
----
+**Supported local workflow: Windows + NVIDIA GPU.** The Wails desktop application runs on Windows; the Python processing Core runs in a Linux Docker container. MinIO runs in the local Kubernetes cluster and is exposed by the launcher. Docker does not contain the desktop window.
 
-## Architecture Overview
+## Prerequisites
 
-* **Edge Acquisition**: Mobile LiDAR SLAM & High-Resolution Photogrammetry (Reality Capture).
-* **Control Layer (Backend)**: Asynchronous, stream-based Go server utilizing `go-chi` and structured JSON logging with `log/slog`.
-* **Processing Layer (Worker)**: Headless Python services leveraging NVIDIA OpenUSD libraries and RTX Neural Texture Compression (NTC) for optimized memory utilization.
-* **Analysis & Visualization**: Desktop analytics environment built with Wails, featuring geometric measurements, telemetry dashboards, and local LLM-assisted reporting (Google Gemma).
+Install and make available on `PATH`:
 
----
+- Windows with [PowerShell 7](https://learn.microsoft.com/powershell/scripting/install/installing-powershell-on-windows).
+- [Go 1.26+](https://go.dev/dl/) (see `nequ3d-app/go.mod`).
+- [Node.js 22.12+](https://nodejs.org/en/download) and npm for the Vite frontend.
+- [Wails v3 CLI](https://v3.wails.io/) and Microsoft Edge WebView2 Runtime. The Go application uses Wails `v3.0.0-alpha.97`; the launcher was verified with CLI `v3.0.0-beta.16`:
 
-## Project Structure
+  ```powershell
+  go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.16
+  ```
 
-```text
-.
-├── backend/        # High-performance Go orchestration server & REST API
-├── nequ3d-core/    # OpenUSD processing scripts & RTX NTC pipeline
-├── viewer/         # Visualization and analytics frontend
-├── data/           # Raw and optimized spatial assets (gitignored)
-└── docs/           # Engineering thesis and technical documentation
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/) running Linux containers with the WSL 2 backend and GPU support; NVIDIA Windows drivers.
+- `kubectl` and a running local Kubernetes cluster selected in its current context.
+- A healthy MinIO deployment named `minio`, service `minio`, in namespace `minio`. The launcher reads credentials from the existing Kubernetes secret and passes them to Go and Core as environment variables; credentials are not embedded in source. The manifest is `gitops/apps/minio-standalone.yaml`, and it requires the `minio-credentials` secret (`rootUser`, `rootPassword`). The launcher forwards this existing deployment; it does not install Kubernetes or overwrite MinIO data.
+- Optional: [Task](https://taskfile.dev/installation/) for the short commands below.
+
+MinIO's manifest currently references `minio/minio:latest` with `IfNotPresent`. This machine can use its cached Kubernetes image, but a fresh installation must supply an available MinIO image. If a pod reports `ImagePullBackOff`, resolve the image in the deployment before launching; a service object alone does not mean MinIO is ready.
+
+## Start everything
+
+From the repository root in PowerShell 7:
+
+```powershell
+task run-all
 ```
 
----
+Without Task (also works from another directory when given the full script path):
 
-## What Is It?
+```powershell
+pwsh -NoProfile -File ./scripts/run-all.ps1
+```
 
-<img alt="nequ3d-app" src="docs/nequ3d_scanning_process.jpg" />
+`task dev` is an alias for `task run-all`. The launcher:
 
-<img alt="nequ3d-app" src="docs/nequ3d_19_08_2026.png" />
+1. Checks required tools, Docker, MinIO availability, and free ports.
+2. Builds `nequ3d-core:v4` if that image is missing; otherwise reuses it.
+3. Starts a hidden MinIO port-forward on `127.0.0.1:9000`.
+4. Starts Core with NVIDIA GPU access and mounts `data/objects` at `/tmp/workspace`.
+5. Checks MinIO HTTP health, Core metrics, TCP connectivity to the gRPC port, and GPU access. This does not run a processing RPC.
+6. Generates Wails bindings and runs `wails3 dev`, including frontend setup and the desktop application.
+7. On normal exit, interruption, or launch failure, stops its Core container and its port-forward. The MinIO deployment stays running.
 
-The platform transforms raw reality-capture datasets into optimized OpenUSD scenes suitable for visualization, analytics, and long-term archival.
+Keep the launcher terminal open. Stop the session with **Ctrl+C** there. Do not run a second session on the same ports. Logs are in `data/logs`; Core logs are saved on shutdown.
 
-The processing workflow enables:
+After changes to Core's Python files or Dockerfile, explicitly rebuild:
 
-* Automated ingestion of LiDAR and photogrammetry assets
-* OpenUSD scene generation and manipulation
-* Neural texture compression using NVIDIA RTX NTC
-* Telemetry collection and performance monitoring
-* Desktop-based geometry inspection and measurement
-* AI-assisted report generation using local LLM inference
+```powershell
+pwsh -NoProfile -File ./scripts/run-all.ps1 -BuildCore
+```
 
----
+Check prerequisites without starting services:
 
-# Prerequisites
+```powershell
+pwsh -NoProfile -File ./scripts/run-all.ps1 -CheckOnly
+```
 
-Before running the system, install the required tooling.
+## Optional AI reports
 
-## Ollama (Local LLM Engine)
+Install Ollama and download only the models you intend to use:
 
-To enable the AI-assisted telemetry analysis and reporting, you must install Ollama and pull the required models to your local machine.
-
-### Installation
-
-https://ollama.com/download
-
-After installing Ollama, pull the models used by the application (you can choose which ones to use in the UI):
-
-```bash
-ollama pull gemma2
+```powershell
+ollama pull gemma:2b
+# Optional alternatives:
 ollama pull llama3
 ollama pull mistral
 ollama pull llava
 ```
 
-Verify your installation by ensuring the Ollama service is running on port `11434`.
+Ollama must listen on `localhost:11434`. It is managed separately and is not stopped by the launcher. The application defaults to `gemma:2b`, not `gemma2`.
 
----
+## Development commands
 
-## Docker
+| Command | Purpose |
+| --- | --- |
+| `task run-all` / `task dev` | Complete Windows development session |
+| `task build-core` | Rebuild the same `nequ3d-core:v4` image |
+| `task dev-app` | Desktop only; assumes Core and MinIO are already running |
+| `task run-core` | Core only in the current terminal; create `data/objects` first and provide MinIO separately |
+| `task proto` | Regenerate Go/Python RPC code after editing `proto/`; requires Python and downloads generation tools |
+| `wails3 build` in `nequ3d-app` | Build the desktop executable in `nequ3d-app/bin`; services remain external |
 
-Docker is used to build and execute the isolated OpenUSD processing environment.
+For manual `task dev-app` or `task run-core`, set `MINIO_ACCESS_KEY` and `MINIO_SECRET_KEY` in that terminal first (use the existing MinIO credentials). `task run-all` supplies them automatically. `NEQU3D_CORE_ADDR` overrides the shared Go gRPC target (default `127.0.0.1:50051`); LocateObjects additionally requires its separate HTTP microservice and is not started by the launcher.
 
-### Installation
+Python is needed on the host for `task proto`, not for ordinary startup. Generated RPC files are committed. Frontend dependencies use `npm ci`; startup does not run `npm audit fix` or intentionally change dependency versions.
 
-https://www.docker.com/products/docker-desktop/
+## Ports and troubleshooting
 
-Verify your installation:
+| Service | Local port |
+| --- | --- |
+| MinIO API | 9000 |
+| Core gRPC | 50051 |
+| Core Prometheus metrics | 8001 |
+| Vite development server | 9245 |
+| Ollama (optional) | 11434 |
 
-```bash
-docker --version
-```
+- **Port already in use:** stop the previous launcher/session. The launcher fails instead of killing unrelated processes or containers.
+- **MinIO unavailable:** inspect `kubectl get pods -n minio` and `kubectl describe pod -n minio <pod-name>`. Check credentials, the selected context, and image availability. For the existing cached `latest` image use `imagePullPolicy: IfNotPresent`.
+- **Core/GPU failure:** inspect `data/logs/core.log`, Docker Desktop, and NVIDIA drivers. This workflow requires GPU access; there is no automatic CPU fallback for NTC.
+- **Flashing terminal:** use the current application source, which hides the Windows console for periodic `nvidia-smi` telemetry calls.
+- **Old Core behavior:** restart with `-BuildCore`; reusing an image does not rebuild it from changed source.
+- **Hard termination:** if the terminal is killed rather than interrupted, cleanup may not execute. Inspect `docker ps` and the recorded port-forward process before stopping the remaining session manually.
 
-Expected output:
-
-```text
-Docker version XX.X.X
-```
-
----
-
-## Wails v3
-
-Wails powers the native desktop analytics application.
-
-### Installation
-
-https://v3alpha.wails.io/getting-started/installation/
-
-Verify installation:
-
-```bash
-wails3 version
-```
-
-Expected output:
+## Repository structure
 
 ```text
-Wails CLI v3.x.x
+nequ3d-app/       Go/Wails desktop backend and TypeScript frontend
+nequ3d-core/      Python gRPC processing, OpenUSD, and Core Dockerfile
+proto/           Shared RPC definitions
+scripts/         Windows launcher and RPC generation scripts
+gitops/, helm/   Kubernetes, GitOps, and monitoring configuration
+ml-services/     Additional ML service sources
+data/            Local objects and logs (ignored by Git)
+docs/            Screenshots
 ```
 
----
+The Core Dockerfile clones RTXNTC itself. The local `nequ3d-core/RTXNTC` gitlink currently lacks a root `.gitmodules` mapping; ordinary Docker startup does not depend on initializing that checkout. Do not discard local changes there when updating the project.
 
-# Building the Processing Environment
+<img alt="Nequ3D scanning process" src="docs/nequ3d_scanning_process.jpg" />
+<img alt="Nequ3D application" src="docs/nequ3d_19_08_2026.png" />
 
-Navigate to the processing module:
+## License
 
-```bash
-cd nequ3d-core
-```
-
-Build the OpenUSD processing container:
-
-```bash
-docker build -t nequ3d-core:latest .
-```
-
-This image contains:
-
-* NVIDIA OpenUSD runtime
-* RTX Neural Texture Compression toolchain
-* Python processing scripts
-* Asset optimization pipeline
-* Headless worker services
-
-Verify the image was created successfully:
-
-```bash
-docker images
-```
-
-Expected result:
-
-```text
-REPOSITORY      TAG       IMAGE ID
-nequ3d-core     latest    xxxxxxxxxxxx
-```
-
----
-
-# Running the Analytics Application
-
-Navigate to the application root:
-
-```bash
-cd nequ3d-app
-```
-
-Generate Wails bindings:
-
-```bash
-wails3 generate bindings
-```
-
-Launch the development environment:
-
-```bash
-wails3 dev
-```
-
-The development environment automatically:
-
-* Generates Go ↔ Frontend bindings
-* Launches the desktop application
-* Enables hot reload
-* Connects backend services
-* Streams telemetry data
-
-For convenience, both commands can be executed together:
-
-```bash
-wails3 generate bindings && wails3 dev
-```
-
----
-
-# Quick Start
-
-Build the processing environment:
-
-```bash
-cd nequ3d-core
-docker build -t nequ3d-core:latest .
-```
-
-Start the analytics application:
-
-```bash
-cd ../nequ3d-app
-wails3 generate bindings && wails3 dev
-```
-
----
-
-# Technology Stack
-
-| Layer            | Technology     |
-| ---------------- | -------------- |
-| Backend          | Go             |
-| API              | Chi Router     |
-| Processing       | Python         |
-| Scene Format     | OpenUSD        |
-| Compression      | NVIDIA RTX NTC |
-| Desktop UI       | Wails          |
-| AI Reporting     | Google Gemma   |
-| Containerization | Docker         |
-
----
-
-# Infrastructure & Access
-
-## Standard Service Ports
-The following standard ports are used by the Kubernetes cluster components. You can access these services locally using the port-forwarding commands defined in the `Taskfile.yml` (these ports remain static unless modified in the configuration):
-
-* **Prometheus UI**: `9090` (`task prometheus-ui`)
-* **Grafana UI**: `3000` (`task monitoring-ui`)
-* **ArgoCD UI**: `8080` (`task gitops-ui`)
-* **MinIO API**: `9000` (`task minio-proxy`)
-* **MinIO Console**: `9001` (`task minio-console`)
-* **Wails Frontend Dev**: `9245`
-
-## GitOps & Security (MinIO Credentials)
-For local testing and development, credentials (like the MinIO root user and password) are stored in plaintext within files such as `gitops/apps/minio.yaml` or `minio-standalone.yaml`. **This is a known practice for local sandboxes but is highly insecure and constitutes a data leak risk in production.**
-
-To securely configure your own instance without leaking data:
-1. **Never commit raw passwords to the repository.**
-2. Retrieve auto-generated cluster secrets when available (e.g., run `task gitops-password` to fetch the auto-generated initial ArgoCD admin password directly from Kubernetes).
-3. For applications like MinIO, implement **Sealed Secrets** (by Bitnami), **SOPS**, or an **External Secrets Operator** (e.g., HashiCorp Vault) to encrypt your secrets before they enter the Git repository.
-
----
-
-# Future Roadmap
-
-* Distributed processing workers
-* Kubernetes deployment support
-* Cloud object storage integration
-* Live telemetry streaming
-* Web-based analytics dashboard
-* Collaborative OpenUSD scene review
-* AI-assisted anomaly detection
-
----
-
-# License
-
-This project is intended for research, engineering, and educational purposes.
+See [LICENSE](LICENSE) (Apache License 2.0). Third-party components have their own licenses.

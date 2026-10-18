@@ -16,6 +16,7 @@ spec:
       containers:
       - name: minio
         image: minio/minio:latest
+        imagePullPolicy: IfNotPresent
         command:
         - minio
         - server

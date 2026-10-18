@@ -486,15 +486,6 @@ function attachEventListeners(): void {
   const selectBtn = getEl<HTMLButtonElement>("select-btn");
   const analyzeBtn = getEl<HTMLButtonElement>("analyze-btn");
 
-  Events.On("pipelineLog", (ev: any) => {
-    // Wails v3 event data is usually ev.data[0]
-    const rawMessage = ev.data && ev.data.length > 0 ? ev.data[0] : String(ev);
-
-    // Tymczasowo wyłączone wyświetlanie logów Dockera z powodu krzaków
-    // outputPre.innerHTML = `<div style="padding:20px; font-family:var(--font-mono); color:var(--accent-teal); font-size:1.1rem; display:flex; align-items:center; gap:12px;">
-    //  <div class="spinner"></div> <span>${rawMessage}</span>
-    // </div>`;
-  });
   const divider = getEl<HTMLDivElement>("comp-divider");
   const compLayer = getEl<HTMLDivElement>("comparison-layer");
 
@@ -1282,18 +1273,11 @@ function toHostPath(path: string): string {
   const workspacePrefix = "/tmp/workspace/";
   const windowsWorkspacePrefix = "\\tmp\\workspace\\";
 
-  if (trimmed.startsWith(workspacePrefix)) {
-    return `${currentModelDir}${trimmed
-      .slice(workspacePrefix.length)
-      .replace(/\//g, "\\")}`;
-  }
-
+  // Container workspace paths are resolved by the Go preview server.
+  if (trimmed.startsWith(workspacePrefix)) return trimmed;
   if (trimmed.startsWith(windowsWorkspacePrefix)) {
-    return `${currentModelDir}${trimmed
-      .slice(windowsWorkspacePrefix.length)
-      .replace(/\//g, "\\")}`;
+    return trimmed.replace(/\\/g, "/");
   }
-
   if (isWindowsAbsolute(trimmed) || trimmed.startsWith("/")) return trimmed;
   if (currentModelDir)
     return `${currentModelDir}${trimmed.replace(/\//g, "\\")}`;

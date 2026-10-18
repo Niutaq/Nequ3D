@@ -3,7 +3,8 @@ import logging
 import os
 import subprocess
 import sys
-import time
+import tempfile
+import uuid
 from concurrent import futures
 
 import boto3
@@ -17,8 +18,8 @@ minio_endpoint = os.environ.get('MINIO_ENDPOINT', 'http://127.0.0.1:9000')
 s3_client = boto3.client(
     's3',
     endpoint_url=minio_endpoint,
-    aws_access_key_id='admin',
-    aws_secret_access_key='Nequ3dSecureStore2026!',
+    aws_access_key_id=os.environ['MINIO_ACCESS_KEY'],
+    aws_secret_access_key=os.environ['MINIO_SECRET_KEY'],
     region_name='us-east-1'
 )
 
@@ -49,32 +50,23 @@ ansi_escape = re.compile(r"(?:\x1B[@-_]|[\x80-\x9F])[0-?]*[ -/]*[@-~]|[\x00-\x1F
 class NtcPipelineService(pipeline_pb2_grpc.NtcPipelineServiceServicer):
     def ProcessModel(self, request, context):
         ACTIVE_GRPC_REQUESTS.inc()
-        logger.info(
-            "Starting processing model", extra={"file_name": request.file_name}
-        )
-
-        yield pipeline_pb2.ProcessModelResponse(
-            update_type="info",
-            message=f"Starting model processing: {request.file_name}",
-        )
-
-        model_dir = "/tmp/workspace"
-        os.makedirs(model_dir, exist_ok=True)
-        file_path = os.path.join(model_dir, request.file_name)
-        
-        logger.info(f"Downloading {request.s3_object_key} from MinIO to {file_path}")
-        s3_client.download_file("raw-scans", request.s3_object_key, file_path)
-
-        cmd = [
-            sys.executable,
-            "-u",
-            "process_usd_file.py",
-            file_path,
-            str(request.target_bitrate),
-            str(request.training_steps),
-        ]
-
         try:
+            logger.info("Starting processing model", extra={"file_name": request.file_name})
+            yield pipeline_pb2.ProcessModelResponse(
+                update_type="info", message=f"Starting model processing: {request.file_name}"
+            )
+            # Each request owns a directory; keep artifacts for local preview.
+            name = request.file_name
+            if not name or name in (".", "..") or any(c in name for c in ("/", "\\", ":", "\x00")):
+                raise ValueError("file_name must be a plain file name")
+            workspace = os.environ.get("NEQU3D_WORKSPACE", "/tmp/workspace")
+            os.makedirs(workspace, exist_ok=True)
+            model_dir = tempfile.mkdtemp(prefix="job-", dir=workspace)
+            file_path = os.path.join(model_dir, name)
+            logger.info("Downloading model from MinIO", extra={"object_key": request.s3_object_key})
+            s3_client.download_file("raw-scans", request.s3_object_key, file_path)
+            cmd = [sys.executable, "-u", "process_usd_file.py", file_path,
+                   str(request.target_bitrate), str(request.training_steps)]
             process = subprocess.Popen(
                 cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
             )
@@ -119,9 +111,10 @@ class NtcPipelineService(pipeline_pb2_grpc.NtcPipelineServiceServicer):
                     telemetry_dict = json.loads(telemetry_json)
                     proxy_path = telemetry_dict.get("proxy_glb_path")
                     if proxy_path and os.path.exists(proxy_path):
-                        proxy_glb_s3_key = f"proxy_{int(time.time())}_{os.path.basename(proxy_path)}"
-                        logger.info(f"Uploading {proxy_path} to MinIO as {proxy_glb_s3_key}")
-                        s3_client.upload_file(proxy_path, "processed-models", proxy_glb_s3_key)
+                        upload_key = f"proxy_{uuid.uuid4().hex}_{os.path.basename(proxy_path)}"
+                        logger.info(f"Uploading {proxy_path} to MinIO as {upload_key}")
+                        s3_client.upload_file(proxy_path, "processed-models", upload_key)
+                        proxy_glb_s3_key = upload_key
                 except Exception as e:
                     logger.error(f"Failed to upload proxy GLB to MinIO: {e}")
 

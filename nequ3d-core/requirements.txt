@@ -2,8 +2,9 @@ usd-core==26.5
 trimesh
 numpy
 Pillow
-grpcio
-grpcio-tools
+grpcio==1.81.1
+grpcio-tools==1.81.1
+protobuf==6.33.6
 prometheus-client
 python-json-logger
 requests

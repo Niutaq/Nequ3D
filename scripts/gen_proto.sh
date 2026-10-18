@@ -43,8 +43,8 @@ if [ ! -f "$PROTOC_EXE" ]; then
 fi
 
 echo "Installing Go plugins (protoc-gen-go, protoc-gen-go-grpc)..."
-go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
-go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
+go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.12
+go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.2
 
 export PATH="$PATH:$(go env GOPATH)/bin"
 
@@ -69,8 +69,8 @@ if [ ! -f "$VENV_PYTHON" ]; then
     VENV_PYTHON="python3"
 fi
 
-$VENV_PYTHON -m pip install grpcio-tools > /dev/null 2>&1 || true
-$VENV_PYTHON -m grpc_tools.protoc -I="$PROJECT_ROOT/proto" \
+"$VENV_PYTHON" -m pip install grpcio-tools==1.81.1 protobuf==6.33.6
+"$VENV_PYTHON" -m grpc_tools.protoc -I="$PROJECT_ROOT/proto" \
     --python_out="$PY_OUTPUT_DIR" \
     --grpc_python_out="$PY_OUTPUT_DIR" \
     "$PROJECT_ROOT/proto/pipeline/pipeline.proto"

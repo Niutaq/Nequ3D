@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -16,9 +17,9 @@ import (
 	"strings"
 	"time"
 
+	pb "changeme/pipeline_rpc/pipeline"
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
-	pb "changeme/pipeline_rpc/pipeline"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -147,11 +148,11 @@ JSON DATA:
 	}
 
 	reqBody := OllamaRequest{
-		Model:   model,
-		Prompt:  prompt,
-		Stream:  true, // Switched to streaming
+		Model:  model,
+		Prompt: prompt,
+		Stream: true, // Switched to streaming
 		Options: map[string]any{
-			"num_ctx": 16384,
+			"num_ctx":     16384,
 			"temperature": 0.0,
 		},
 	}
@@ -190,7 +191,7 @@ JSON DATA:
 		var ollamaResp OllamaResponse
 		if err := json.Unmarshal(line, &ollamaResp); err == nil {
 			token := ollamaResp.Response
-			
+
 			if !started {
 				fullResponse.WriteString(token)
 				currentStr := fullResponse.String()
@@ -301,11 +302,13 @@ func emitGPUStats(app *application.App) {
 
 func queryNVIDIAStats() SystemStats {
 	stats := SystemStats{Time: time.Now().Format("15:04:05")}
-	output, err := exec.Command(
+	cmd := exec.Command(
 		"nvidia-smi",
 		"--query-gpu=utilization.gpu,memory.used,memory.total",
 		"--format=csv,noheader,nounits",
-	).Output()
+	)
+	configureBackgroundCommand(cmd)
+	output, err := cmd.Output()
 
 	if err != nil {
 		stats.Available = false
@@ -342,6 +345,7 @@ func queryNVIDIAStats() SystemStats {
 
 // ProcessModel triggers the Docker pipeline for USD analysis or bypasses for GLB
 func (a *App) ProcessModel(absolutePath string, bpp string, steps string) (string, error) {
+	previews.register(absolutePath)
 	if absolutePath == "" {
 		return "", fmt.Errorf("absolute path is empty")
 	}
@@ -403,7 +407,7 @@ func (a *App) ProcessModel(absolutePath string, bpp string, steps string) (strin
 	}
 
 	// Connect to Python gRPC server (exposed via task run-core on port 50051)
-	conn, err := grpc.NewClient("127.0.0.1:50051", 
+	conn, err := grpc.NewClient(coreAddress(),
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithDefaultCallOptions(
 			grpc.MaxCallRecvMsgSize(100*1024*1024),
@@ -421,10 +425,18 @@ func (a *App) ProcessModel(absolutePath string, bpp string, steps string) (strin
 	stepsInt, _ := strconv.Atoi(steps)
 
 	fileName := filepath.Base(absolutePath)
-	
-	// Upload file to MinIO
-	minioClient, err := minio.New("127.0.0.1:9000", &minio.Options{
-		Creds:  credentials.NewStaticV4("admin", "Nequ3dSecureStore2026!", ""),
+
+	// The launcher inherits these credentials from the Kubernetes secret.
+	accessKey, secretKey := os.Getenv("MINIO_ACCESS_KEY"), os.Getenv("MINIO_SECRET_KEY")
+	if accessKey == "" || secretKey == "" {
+		return "", fmt.Errorf("missing MINIO_ACCESS_KEY/MINIO_SECRET_KEY; use task run-all or configure the environment")
+	}
+	endpoint := os.Getenv("NEQU3D_MINIO_ENDPOINT")
+	if endpoint == "" {
+		endpoint = "127.0.0.1:9000"
+	}
+	minioClient, err := minio.New(endpoint, &minio.Options{
+		Creds:  credentials.NewStaticV4(accessKey, secretKey, ""),
 		Secure: false,
 	})
 	if err != nil {
@@ -452,16 +464,14 @@ func (a *App) ProcessModel(absolutePath string, bpp string, steps string) (strin
 		}
 	}
 
-	objectKey := fmt.Sprintf("%d-%s", time.Now().Unix(), fileName)
-	
+	objectKey := fmt.Sprintf("%s-%s", rand.Text(), fileName)
+
 	fmt.Printf("[Wails Backend] Uploading %s to MinIO (bucket: %s, key: %s)...\n", fileName, bucketName, objectKey)
 	_, err = minioClient.FPutObject(context.Background(), bucketName, objectKey, absolutePath, minio.PutObjectOptions{})
 	if err != nil {
 		return "", fmt.Errorf("failed to upload to MinIO: %v", err)
 	}
 	fmt.Printf("[Wails Backend] Upload to MinIO complete!\n")
-
-
 
 	req := &pb.ProcessModelRequest{
 		FileName:      fileName,
@@ -498,7 +508,7 @@ func (a *App) ProcessModel(absolutePath string, bpp string, steps string) (strin
 			return "", fmt.Errorf("pipeline error: %s", update.Message)
 		case "result":
 			jsonResult = update.TelemetryJson
-			
+
 			if update.ProxyGlbS3Key != "" {
 				tempFile, err := os.CreateTemp("", "proxy_*.glb")
 				if err == nil {
@@ -526,6 +536,7 @@ func (a *App) ProcessModel(absolutePath string, bpp string, steps string) (strin
 
 	fmt.Printf("[Wails Backend] Successfully received telemetry for %s. Processing finished.\n", fileName)
 
+	previews.registerTelemetry(jsonResult)
 	return jsonResult, nil
 }
 
@@ -552,12 +563,13 @@ func (a *App) SelectFile() (string, error) {
 		return "", fmt.Errorf("dialog error: %v", err)
 	}
 
+	previews.register(path)
 	return path, nil
 }
 
 // LocateObjects sends a snapshot and prompt to the Python Backend for object detection
 func (a *App) LocateObjects(imageBase64 string, prompt string) (string, error) {
-	conn, err := grpc.NewClient("nequ3d.local:80", 
+	conn, err := grpc.NewClient(coreAddress(),
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithDefaultCallOptions(
 			grpc.MaxCallRecvMsgSize(100*1024*1024),
@@ -606,17 +618,17 @@ func (a *App) LocateObjects(imageBase64 string, prompt string) (string, error) {
 // Sketchfab error codes understood by the frontend i18n layer.
 // The frontend maps these to localized, user-friendly messages.
 const (
-	ErrSketchfabNetwork     = "SKETCHFAB_NETWORK"
-	ErrSketchfabRequest     = "SKETCHFAB_REQUEST"
-	ErrSketchfabInvalidTok  = "SKETCHFAB_INVALID_TOKEN"
-	ErrSketchfabForbidden   = "SKETCHFAB_FORBIDDEN"
-	ErrSketchfabNotFound    = "SKETCHFAB_NOT_FOUND"
-	ErrSketchfabRateLimit   = "SKETCHFAB_RATE_LIMIT"
-	ErrSketchfabServer      = "SKETCHFAB_SERVER"
-	ErrSketchfabParse       = "SKETCHFAB_PARSE"
-	ErrSketchfabNoUsdz      = "SKETCHFAB_NO_USDZ"
-	ErrSketchfabNoGlb       = "SKETCHFAB_NO_GLB"
-	ErrSketchfabDownload    = "SKETCHFAB_DOWNLOAD"
+	ErrSketchfabNetwork    = "SKETCHFAB_NETWORK"
+	ErrSketchfabRequest    = "SKETCHFAB_REQUEST"
+	ErrSketchfabInvalidTok = "SKETCHFAB_INVALID_TOKEN"
+	ErrSketchfabForbidden  = "SKETCHFAB_FORBIDDEN"
+	ErrSketchfabNotFound   = "SKETCHFAB_NOT_FOUND"
+	ErrSketchfabRateLimit  = "SKETCHFAB_RATE_LIMIT"
+	ErrSketchfabServer     = "SKETCHFAB_SERVER"
+	ErrSketchfabParse      = "SKETCHFAB_PARSE"
+	ErrSketchfabNoUsdz     = "SKETCHFAB_NO_USDZ"
+	ErrSketchfabNoGlb      = "SKETCHFAB_NO_GLB"
+	ErrSketchfabDownload   = "SKETCHFAB_DOWNLOAD"
 )
 
 // sketchfabErr wraps an error with a stable machine-readable code that the
@@ -707,25 +719,35 @@ func (a *App) DownloadFromSketchfab(uid string, token string) (string, error) {
 
 	// Download USDZ
 	usdzReq, err := http.NewRequest("GET", data.Usdz.Url, nil)
-	if err != nil { return "", &sketchfabErr{Code: ErrSketchfabDownload, Msg: err.Error()} }
+	if err != nil {
+		return "", &sketchfabErr{Code: ErrSketchfabDownload, Msg: err.Error()}
+	}
 	usdzResp, err := downloadClient.Do(usdzReq)
-	if err != nil { return "", &sketchfabErr{Code: ErrSketchfabDownload, Msg: err.Error()} }
+	if err != nil {
+		return "", &sketchfabErr{Code: ErrSketchfabDownload, Msg: err.Error()}
+	}
 	defer usdzResp.Body.Close()
-	
+
 	if usdzResp.StatusCode != http.StatusOK {
 		return "", &sketchfabErr{Code: ErrSketchfabDownload, Msg: fmt.Sprintf("USDZ status %d", usdzResp.StatusCode)}
 	}
 	usdzPath := filepath.Join(downloadsDir, uid+".usdz")
 	usdzOut, err := os.Create(usdzPath)
-	if err != nil { return "", &sketchfabErr{Code: ErrSketchfabDownload, Msg: err.Error()} }
+	if err != nil {
+		return "", &sketchfabErr{Code: ErrSketchfabDownload, Msg: err.Error()}
+	}
 	io.Copy(usdzOut, usdzResp.Body)
 	usdzOut.Close()
 
 	// Download GLB for Preview
 	glbReq, err := http.NewRequest("GET", data.Glb.Url, nil)
-	if err != nil { return "", &sketchfabErr{Code: ErrSketchfabDownload, Msg: err.Error()} }
+	if err != nil {
+		return "", &sketchfabErr{Code: ErrSketchfabDownload, Msg: err.Error()}
+	}
 	glbResp, err := downloadClient.Do(glbReq)
-	if err != nil { return "", &sketchfabErr{Code: ErrSketchfabDownload, Msg: err.Error()} }
+	if err != nil {
+		return "", &sketchfabErr{Code: ErrSketchfabDownload, Msg: err.Error()}
+	}
 	defer glbResp.Body.Close()
 
 	if glbResp.StatusCode != http.StatusOK {
@@ -733,10 +755,13 @@ func (a *App) DownloadFromSketchfab(uid string, token string) (string, error) {
 	}
 	glbPath := filepath.Join(downloadsDir, uid+".glb")
 	glbOut, err := os.Create(glbPath)
-	if err != nil { return "", &sketchfabErr{Code: ErrSketchfabDownload, Msg: err.Error()} }
+	if err != nil {
+		return "", &sketchfabErr{Code: ErrSketchfabDownload, Msg: err.Error()}
+	}
 	io.Copy(glbOut, glbResp.Body)
 	glbOut.Close()
 
+	previews.register(glbPath)
 	return glbPath, nil
 }
 

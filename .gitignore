@@ -1,4 +1,8 @@
 # Binaries
+**/node_modules/
+.tools/
+ntc_log.txt
+nequ3d-core/venv/
 *.exe
 *.bin
 backend/server.exe

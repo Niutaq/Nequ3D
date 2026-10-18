@@ -19,7 +19,7 @@ tasks:
     desc: Starts the Python gRPC server locally (Requires a separate terminal!)
     dir: nequ3d-core
     cmds:
-      - cmd: docker run --rm --gpus all -e MINIO_ENDPOINT="http://host.docker.internal:9000" -p 50051:50051 -p 8001:8001 nequ3d-core:v4
+      - cmd: docker run --rm --gpus all -e MINIO_ACCESS_KEY -e MINIO_SECRET_KEY -e MINIO_ENDPOINT="http://host.docker.internal:9000" --mount "type=bind,source={{.ROOT_DIR}}/data/objects,target=/tmp/workspace" -p 127.0.0.1:50051:50051 -p 127.0.0.1:8001:8001 nequ3d-core:v4
         platforms: [windows, linux, darwin]
 
   dev-app:
@@ -30,10 +30,9 @@ tasks:
       - wails3 dev
 
   dev:
-    desc: Prepares everything and starts the dev server (builds core, generates proto, runs app)
+    desc: Alias for run-all (Windows desktop + Core + MinIO forwarding)
     cmds:
-      - task: run-core
-      - task: dev-app
+      - task: run-all
 
   # build-locate:
   #   desc: Builds the Docker image for the LocateAnything microservice
@@ -98,28 +97,7 @@ tasks:
       - kubectl port-forward svc/minio -n minio 9001:9001
 
   run-all:
-    desc: One-command dev launch — builds core, then starts MinIO forward + gRPC core in background and the app in the foreground
+    desc: Starts the complete Windows development session; builds Core only when missing
+    platforms: [windows]
     cmds:
-      - task: proto
-      - task: build-core
-      - cmd: pwsh -File ./scripts/run-all.ps1
-        platforms: [windows]
-
-  # Starts kubectl port-forward for MinIO in the background so the app can
-  # reach 127.0.0.1:9000. Exits cleanly when the parent task stops.
-  minio-forward:
-    desc: "Background: forwards the MinIO service to 127.0.0.1:9000"
-    background: true
-    ignore_error: true
-    cmds:
-      - cmd: kubectl port-forward svc/minio 9000:9000 -n minio
-
-  # Starts the Python gRPC core (Docker) in the background so the app can
-  # reach 127.0.0.1:50051. Tries with GPU first, falls back to CPU-only.
-  core-server:
-    desc: "Background: starts the gRPC processing core"
-    background: true
-    ignore_error: true
-    cmds:
-      - cmd: docker run --rm --gpus all -e MINIO_ENDPOINT="http://host.docker.internal:9000" -p 50051:50051 -p 8001:8001 nequ3d-core:v4
-      - cmd: docker run --rm -e MINIO_ENDPOINT="http://host.docker.internal:9000" -p 50051:50051 -p 8001:8001 nequ3d-core:v4
+      - pwsh -NoProfile -File ./scripts/run-all.ps1
