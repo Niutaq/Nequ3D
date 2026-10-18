@@ -1,12 +1,16 @@
 # Nequ3D — OpenUSD Edge-to-Core Pipeline
 
-<div align="center">
-  <img width="500" height="500" alt="Nequ3D logo" src="https://github.com/user-attachments/assets/257868db-f8fc-4060-a200-1de4a688280c" />
+<div align="left">
+  <img width="250" height="250" alt="Nequ3D logo" src="https://github.com/user-attachments/assets/cad8e101-5116-45e5-8f56-742ff72a3a07" />
 </div>
 
 Nequ3D is a research application for inspecting captured 3D assets, processing OpenUSD scenes, measuring GPU telemetry, and compressing UV textures with NVIDIA RTX Neural Texture Compression (NTC). The desktop interface supports English and Polish. Local AI reports use Ollama.
 
 **Supported local workflow: Windows + NVIDIA GPU.** The Wails desktop application runs on Windows; the Python processing Core runs in a Linux Docker container. MinIO runs in the local Kubernetes cluster and is exposed by the launcher. Docker does not contain the desktop window.
+
+<img alt="Nequ3D scanning process" src="docs/nequ3d_scanning_process.jpg" />
+
+<img alt="Nequ3D application" src="docs/nequ3d_19_08_2026.png" />
 
 ## Prerequisites
 
@@ -126,9 +130,6 @@ docs/            Screenshots
 ```
 
 The Core Dockerfile clones RTXNTC itself. The local `nequ3d-core/RTXNTC` gitlink currently lacks a root `.gitmodules` mapping; ordinary Docker startup does not depend on initializing that checkout. Do not discard local changes there when updating the project.
-
-<img alt="Nequ3D scanning process" src="docs/nequ3d_scanning_process.jpg" />
-<img alt="Nequ3D application" src="docs/nequ3d_19_08_2026.png" />
 
 ## License
 
