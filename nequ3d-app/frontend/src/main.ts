@@ -10,6 +10,25 @@ import "@google/model-viewer";
 import { Events } from "@wailsio/runtime";
 import { IntLayer, type Language } from "./i18n";
 import { Chart, registerables } from "chart.js";
+import {
+  applySectionPlane,
+  bindViewerTools,
+  clearMeasurements,
+  formatDistance,
+  getMeasurements,
+  getSectionT,
+  isSectionEnabled,
+  readModelExtents,
+  setMeasurementsListener,
+  setPendingListener,
+  setSectionAxis,
+  setSectionEnabled,
+  setSectionT,
+  setToolMode,
+  type Measurement,
+  type SectionAxis,
+  type ToolMode,
+} from "./viewer-tools";
 Chart.register(...registerables);
 
 type ViewerMode = "mesh" | "quality";
@@ -49,45 +68,50 @@ type PipelineTelemetry = {
 // Fallback used only until the backend publishes the dynamically-assigned
 // local-file server URL via the "localServerUrl" event.
 let LOCAL_FILE_ENDPOINT = "http://localhost:9387/api/local-file?path=";
-const MIN_LEFT_PANEL = 280;
-const MIN_RIGHT_PANEL = 300;
+const MIN_LEFT_PANEL = 260;
+const MIN_RIGHT_PANEL = 280;
 const MIN_CENTER_PANEL = 420;
 const TEXT_SCALE_OPTIONS: Record<TextScale, string> = {
-  sm: "16px",
-  md: "20px",
-  lg: "24px",
+  sm: "15px",
+  md: "17px",
+  lg: "20px",
 };
 
 const style = document.createElement("style");
 style.textContent = `
   :root {
-    --base-font-size: 20px;
-    --bg-base: #121212;
-    --bg-panel: #1A1A1A;
-    --bg-darker: #0D0D0D;
-    --border-color: #2D3748;
-    --accent-teal: #0D9488;
-    --accent-teal-dim: rgba(13, 148, 136, 0.14);
-    --text-main: #F7FAFC;
-    --text-muted: #A0AEC0;
-    --font-mono: 'JetBrains Mono', monospace;
-    --left-panel-width: 400px;
-    --right-panel-width: 420px;
+    --base-font-size: 17px;
+    --bg-base: #0a0c0e;
+    --bg-panel: #12161a;
+    --bg-darker: #07090b;
+    --border-color: rgba(148, 163, 184, 0.12);
+    --accent-teal: #14b8a6;
+    --accent-teal-dim: rgba(20, 184, 166, 0.12);
+    --accent-warm: #f59e0b;
+    --text-main: #f1f5f9;
+    --text-muted: #94a3b8;
+    --font-sans: 'Sora', system-ui, sans-serif;
+    --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+    --left-panel-width: 320px;
+    --right-panel-width: 340px;
+    --radius: 10px;
+    --glass: rgba(12, 16, 20, 0.72);
   }
 
   body[data-theme="light"] {
-    --bg-base: #F7FAFC;
-    --bg-panel: #FFFFFF;
-    --bg-darker: #EDF2F7;
-    --border-color: #E2E8F0;
-    --text-main: #1A202C;
-    --text-muted: #718096;
+    --bg-base: #eef2f6;
+    --bg-panel: #ffffff;
+    --bg-darker: #e2e8f0;
+    --border-color: rgba(15, 23, 42, 0.08);
+    --text-main: #0f172a;
+    --text-muted: #64748b;
+    --glass: rgba(255, 255, 255, 0.82);
   }
 
   * { box-sizing: border-box; }
 
   html {
-    font-size: var(--base-font-size, 20px);
+    font-size: var(--base-font-size, 17px);
     transition: font-size 0.18s ease;
   }
 
@@ -95,7 +119,7 @@ style.textContent = `
     margin: 0;
     background: var(--bg-base);
     color: var(--text-main);
-    font-family: 'Inter', sans-serif;
+    font-family: var(--font-sans);
     overflow: hidden;
     height: 100vh;
     user-select: none;
@@ -104,40 +128,68 @@ style.textContent = `
   .workspace {
     display: grid;
     grid-template-columns: var(--left-panel-width) 1fr var(--right-panel-width);
-    grid-template-rows: 80px 1fr;
+    grid-template-rows: 64px 1fr;
     grid-template-areas:
       "topbar topbar topbar"
       "leftpanel viewport rightpanel";
     height: 100vh;
     width: 100vw;
-    background: radial-gradient(circle at top right, rgba(13, 148, 136, 0.08), transparent 50%), var(--bg-base);
+    background:
+      radial-gradient(ellipse 80% 50% at 70% -10%, rgba(20, 184, 166, 0.09), transparent 55%),
+      radial-gradient(ellipse 50% 40% at 10% 100%, rgba(15, 23, 42, 0.5), transparent 50%),
+      var(--bg-base);
   }
 
   .topbar {
     grid-area: topbar;
-    background: var(--bg-darker);
+    background: color-mix(in srgb, var(--bg-darker) 88%, transparent);
+    backdrop-filter: blur(12px);
     border-bottom: 1px solid var(--border-color);
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 0 32px;
+    padding: 0 20px 0 24px;
     z-index: 100;
+    gap: 24px;
+  }
+
+  .brand-block {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 140px;
+  }
+  .brand-mark {
+    font-family: var(--font-sans);
+    font-weight: 700;
+    font-size: 1.15rem;
+    letter-spacing: -0.04em;
+    line-height: 1;
+  }
+  .brand-mark span { color: var(--accent-teal); }
+  .brand-tag {
+    font-family: var(--font-mono);
+    font-size: 0.55rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
   }
 
   .leftpanel {
     grid-area: leftpanel;
     background: var(--bg-panel);
     border-right: 1px solid var(--border-color);
-    padding: 32px;
+    padding: 22px 20px;
     display: flex;
     flex-direction: column;
-    gap: 32px;
+    gap: 22px;
     overflow-y: auto;
   }
 
   .viewport {
     grid-area: viewport;
-    background: transparent;
+    background:
+      radial-gradient(circle at 50% 40%, #141a20 0%, #050607 70%);
     position: relative;
     overflow: hidden;
   }
@@ -146,56 +198,71 @@ style.textContent = `
     grid-area: rightpanel;
     background: var(--bg-panel);
     border-left: 1px solid var(--border-color);
-    padding: 32px;
+    padding: 22px 20px;
     display: flex;
     flex-direction: column;
     gap: 32px;
     overflow-y: auto;
   }
 
-  .telemetry-group { display: flex; gap: 40px; }
-  .telemetry-item { display: flex; flex-direction: column; gap: 6px; }
+  .telemetry-group { display: flex; gap: 28px; flex: 1; justify-content: center; }
+  .telemetry-item { display: flex; flex-direction: column; gap: 4px; }
   .telemetry-label { font-family: var(--font-mono); font-size: 0.55rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.1em; }
-  .telemetry-value { font-family: var(--font-mono); font-size: 0.9rem; font-weight: 600; color: var(--accent-teal); }
+  .telemetry-value { font-family: var(--font-mono); font-size: 0.85rem; font-weight: 600; color: var(--accent-teal); }
 
-  .sys-bar-bg { width: 80px; height: 3px; background: var(--border-color); margin-top: 6px; }
+  .sys-bar-bg { width: 72px; height: 2px; background: var(--border-color); margin-top: 4px; border-radius: 99px; overflow: hidden; }
   .sys-bar-fill { height: 100%; background: var(--accent-teal); transition: width 0.3s; }
 
   .technical-button {
-    background: linear-gradient(180deg, var(--bg-panel) 0%, var(--bg-darker) 100%);
+    background: transparent;
     border: 1px solid var(--border-color);
     color: var(--text-main);
-    padding: 16px;
+    padding: 14px 16px;
     cursor: pointer;
     font-family: var(--font-mono);
-    font-size: 0.65rem;
+    font-size: 0.62rem;
     font-weight: 600;
     text-transform: uppercase;
+    letter-spacing: 0.06em;
     display: flex;
     align-items: center;
     justify-content: center;
-    gap: 14px;
-    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-    border-radius: 8px;
-    box-shadow: inset 0 1px 0 rgba(255,255,255,0.05), 0 2px 4px rgba(0,0,0,0.1);
+    gap: 12px;
+    transition: border-color 0.2s, background 0.2s, color 0.2s, transform 0.15s;
+    border-radius: var(--radius);
   }
-  .technical-button:active:not(:disabled) { box-shadow: inset 0 2px 4px rgba(0,0,0,0.4); transform: translateY(1px); }
+  .technical-button:active:not(:disabled) { transform: translateY(1px); }
   .technical-button:hover:not(:disabled) { border-color: var(--accent-teal); background: var(--accent-teal-dim); color: var(--accent-teal); }
   .technical-button:disabled { opacity: 0.4; cursor: not-allowed; }
-  .technical-button.primary { border-color: var(--accent-teal); color: var(--accent-teal); background: var(--accent-teal-dim); }
+  .technical-button.primary { border-color: color-mix(in srgb, var(--accent-teal) 55%, transparent); color: var(--accent-teal); background: var(--accent-teal-dim); }
 
-  .panel-section { display: flex; flex-direction: column; gap: 16px; }
-  .section-label { font-family: var(--font-mono); font-size: 0.6rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; border-left: 2px solid var(--accent-teal); padding-left: 10px; }
+  .panel-section { display: flex; flex-direction: column; gap: 12px; }
+  .section-label { font-family: var(--font-mono); font-size: 0.58rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.08em; border-left: 2px solid var(--accent-teal); padding-left: 10px; }
 
-  .technical-select { background: var(--bg-darker); border: 1px solid var(--border-color); color: var(--text-main); padding: 12px; font-family: var(--font-mono); font-size: 0.7rem; width: 100%; outline: none; }
+  .technical-select { background: var(--bg-darker); border: 1px solid var(--border-color); color: var(--text-main); padding: 11px 12px; font-family: var(--font-mono); font-size: 0.68rem; width: 100%; outline: none; border-radius: 8px; }
 
   input[type="range"]:not(.comp-slider) { -webkit-appearance: none; width: 100%; background: transparent; }
-  input[type="range"]:not(.comp-slider)::-webkit-slider-runnable-track { width: 100%; height: 2px; background: var(--border-color); }
-  input[type="range"]:not(.comp-slider)::-webkit-slider-thumb { -webkit-appearance: none; height: 16px; width: 8px; background: var(--accent-teal); margin-top: -7px; cursor: pointer; }
+  input[type="range"]:not(.comp-slider)::-webkit-slider-runnable-track { width: 100%; height: 2px; background: var(--border-color); border-radius: 99px; }
+  input[type="range"]:not(.comp-slider)::-webkit-slider-thumb { -webkit-appearance: none; height: 14px; width: 14px; background: var(--accent-teal); margin-top: -6px; cursor: pointer; border-radius: 50%; box-shadow: 0 0 0 3px var(--accent-teal-dim); }
 
-  .viewer-tabs { position: absolute; top: 0; left: 0; display: flex; z-index: 1000; background: var(--bg-darker); border-bottom: 1px solid var(--border-color); border-right: 1px solid var(--border-color); }
-  .view-tab { background: transparent; border: none; border-right: 1px solid var(--border-color); color: var(--text-muted); padding: 14px 28px; font-family: var(--font-mono); font-size: 0.6rem; text-transform: uppercase; cursor: pointer; transition: all 0.2s; }
-  .view-tab.active { color: var(--accent-teal); background: var(--bg-panel); box-shadow: inset 0 -2px 0 var(--accent-teal); }
+  .viewer-chrome {
+    position: absolute; top: 14px; left: 14px; right: 14px;
+    display: flex; align-items: center; gap: 10px; z-index: 20; pointer-events: none;
+  }
+  .viewer-chrome > * { pointer-events: auto; }
+  .viewer-tabs {
+    display: flex; align-items: center; gap: 2px;
+    background: var(--glass); backdrop-filter: blur(14px);
+    border: 1px solid var(--border-color); border-radius: 999px; padding: 4px;
+  }
+  .view-tab {
+    background: transparent; border: none; color: var(--text-muted);
+    padding: 8px 14px; font-family: var(--font-mono); font-size: 0.58rem;
+    text-transform: uppercase; letter-spacing: 0.06em; cursor: pointer;
+    transition: color 0.2s, background 0.2s; border-radius: 999px;
+  }
+  .view-tab.active { color: var(--bg-darker); background: var(--accent-teal); font-weight: 700; }
+  .view-tab:hover:not(.active) { color: var(--text-main); }
 
   .viewer-layer { position: absolute; inset: 0; width: 100%; height: 100%; }
   .comparison-wrapper { display: block; overflow: hidden; position: absolute; inset: 0; background: #000; }
@@ -203,50 +270,135 @@ style.textContent = `
   .comp-img { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
   .img-after { position: absolute; inset: 0; z-index: 2; }
   .comp-slider { display: none; }
-  .comp-divider { position: absolute; top: 0; bottom: 0; width: 4px; margin-left: -2px; background: var(--accent-teal); pointer-events: auto; cursor: ew-resize; z-index: 10; box-shadow: 0 0 10px var(--accent-teal); display: flex; align-items: center; justify-content: center; }
-  .comp-divider::after { content: ""; background: var(--bg-panel); color: var(--accent-teal); border: 2px solid var(--accent-teal); border-radius: 50%; width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: bold; }
+  .comp-divider { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--accent-teal); pointer-events: auto; cursor: ew-resize; z-index: 10; box-shadow: 0 0 18px rgba(20,184,166,0.45); display: flex; align-items: center; justify-content: center; }
+  .comp-divider::after { content: ""; background: var(--bg-panel); border: 2px solid var(--accent-teal); border-radius: 50%; width: 22px; height: 22px; }
 
-  .viewer-placeholder { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; color: var(--text-muted); font-family: var(--font-mono); text-transform: uppercase; letter-spacing: 0.2em; gap: 20px; }
+  .viewer-placeholder { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; color: var(--text-muted); font-family: var(--font-mono); text-transform: uppercase; letter-spacing: 0.18em; gap: 16px; font-size: 0.7rem; }
+
+  .viewport-toolbar {
+    position: absolute; left: 50%; bottom: 22px; transform: translateX(-50%);
+    display: flex; align-items: center; gap: 4px;
+    background: var(--glass); backdrop-filter: blur(16px);
+    border: 1px solid var(--border-color); border-radius: 999px; padding: 6px;
+    z-index: 30; box-shadow: 0 12px 40px rgba(0,0,0,0.35);
+  }
+  .tool-btn {
+    border: none; background: transparent; color: var(--text-muted);
+    font-family: var(--font-mono); font-size: 0.58rem; text-transform: uppercase;
+    letter-spacing: 0.05em; padding: 10px 14px; border-radius: 999px; cursor: pointer;
+    transition: background 0.2s, color 0.2s;
+  }
+  .tool-btn:hover { color: var(--text-main); background: rgba(255,255,255,0.04); }
+  .tool-btn.active { color: var(--bg-darker); background: var(--accent-teal); font-weight: 700; }
+  .tool-sep { width: 1px; height: 22px; background: var(--border-color); margin: 0 4px; }
+
+  .dims-badge {
+    margin-left: auto;
+    background: var(--glass); backdrop-filter: blur(14px);
+    border: 1px solid var(--border-color); border-radius: 999px;
+    padding: 8px 14px; font-family: var(--font-mono); font-size: 0.58rem;
+    color: var(--accent-teal); letter-spacing: 0.04em; white-space: nowrap;
+  }
+
+  .fps-pill {
+    background: var(--glass); backdrop-filter: blur(14px);
+    border: 1px solid var(--border-color); border-radius: 999px;
+    padding: 8px 12px; font-family: var(--font-mono); font-size: 0.58rem;
+    color: var(--accent-teal); font-weight: 600;
+  }
+
+  .section-rail {
+    position: absolute; right: 18px; top: 50%; transform: translateY(-50%);
+    width: 44px; height: min(42vh, 280px);
+    display: none; flex-direction: column; align-items: center; gap: 10px;
+    background: var(--glass); backdrop-filter: blur(14px);
+    border: 1px solid var(--border-color); border-radius: 999px; padding: 14px 0;
+    z-index: 25;
+  }
+  .section-rail.visible { display: flex; }
+  .section-rail input[type="range"] {
+    writing-mode: vertical-lr; direction: rtl;
+    width: 18px; height: 100%; flex: 1;
+  }
+  .section-axis-row { display: flex; gap: 6px; }
+  .axis-chip {
+    flex: 1; border: 1px solid var(--border-color); background: transparent;
+    color: var(--text-muted); border-radius: 8px; padding: 8px 0;
+    font-family: var(--font-mono); font-size: 0.62rem; cursor: pointer;
+  }
+  .axis-chip.active { border-color: var(--accent-teal); color: var(--accent-teal); background: var(--accent-teal-dim); }
+
+  .measure-hotspot {
+    display: grid; place-items: center; width: 22px; height: 22px;
+    border-radius: 50%; border: 2px solid var(--accent-teal);
+    background: rgba(7, 9, 11, 0.85); color: var(--accent-teal);
+    font-family: var(--font-mono); font-size: 0.55rem; font-weight: 700;
+    transform: translate(-50%, -50%); cursor: default; pointer-events: none;
+    box-shadow: 0 0 0 4px var(--accent-teal-dim);
+  }
+
+  .measure-list { display: flex; flex-direction: column; gap: 8px; max-height: 180px; overflow: auto; }
+  .measure-row {
+    display: flex; justify-content: space-between; align-items: baseline; gap: 12px;
+    padding: 10px 12px; border-radius: 8px; background: var(--bg-darker);
+    border: 1px solid var(--border-color); font-family: var(--font-mono); font-size: 0.68rem;
+  }
+  .measure-row strong { color: var(--accent-teal); font-size: 0.8rem; }
+  .measure-hint { font-size: 0.72rem; color: var(--text-muted); line-height: 1.45; }
+  .measure-hint.pending { color: var(--accent-warm); }
+
+  .ingest-details {
+    border: 1px solid var(--border-color); border-radius: var(--radius);
+    background: color-mix(in srgb, var(--bg-darker) 80%, transparent);
+    padding: 0;
+  }
+  .ingest-details summary {
+    list-style: none; cursor: pointer; padding: 12px 14px;
+    font-family: var(--font-mono); font-size: 0.58rem; text-transform: uppercase;
+    letter-spacing: 0.08em; color: var(--text-muted);
+  }
+  .ingest-details summary::-webkit-details-marker { display: none; }
+  .ingest-details[open] summary { color: var(--accent-teal); border-bottom: 1px solid var(--border-color); }
+  .ingest-body { padding: 12px; display: flex; flex-direction: column; gap: 8px; }
 
   #output {
     flex: 1;
-    min-height: 160px;
+    min-height: 120px;
     background: transparent;
     overflow: auto;
     margin: 0;
     scrollbar-color: var(--border-color) transparent;
     scrollbar-width: thin;
   }
-  #output::-webkit-scrollbar { width: 8px; height: 8px; }
+  #output::-webkit-scrollbar { width: 6px; height: 6px; }
   #output::-webkit-scrollbar-track { background: transparent; }
   #output::-webkit-scrollbar-thumb { background: var(--border-color); border-radius: 999px; }
   #output::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
 
-  .metric-card { background: var(--bg-darker); border: 1px solid var(--border-color); border-radius: 8px; padding: 16px; display: flex; flex-direction: column; gap: 6px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); }
-  .metric-title { font-family: var(--font-mono); font-size: 0.65rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; }
-  .metric-value { font-size: 1.4rem; font-weight: 800; color: var(--text-main); }
+  .metric-card { background: var(--bg-darker); border: 1px solid var(--border-color); border-radius: var(--radius); padding: 14px; display: flex; flex-direction: column; gap: 4px; }
+  .metric-title { font-family: var(--font-mono); font-size: 0.58rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; }
+  .metric-value { font-size: 1.25rem; font-weight: 700; color: var(--text-main); letter-spacing: -0.02em; }
   .metric-value.highlight { color: var(--accent-teal); }
-  .telemetry-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
-  .chart-container { background: var(--bg-darker); border: 1px solid var(--border-color); border-radius: 12px; padding: 16px; margin-top: 16px; display: flex; flex-direction: column; position: relative; }
-  .chart-canvas-wrapper { position: relative; height: 180px; width: 100%; display: flex; justify-content: center; }
+  .telemetry-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px; }
+  .chart-container { background: var(--bg-darker); border: 1px solid var(--border-color); border-radius: var(--radius); padding: 14px; margin-top: 12px; display: flex; flex-direction: column; position: relative; }
+  .chart-canvas-wrapper { position: relative; height: 160px; width: 100%; display: flex; justify-content: center; }
 
   #ai-output {
     flex: 1;
     overflow-y: auto;
-    padding-right: 12px;
-    font-size: 0.95rem;
-    line-height: 1.7;
+    padding-right: 8px;
+    font-size: 0.88rem;
+    line-height: 1.65;
     color: var(--text-main);
   }
   .ai-insight-card {
-    background: linear-gradient(145deg, var(--bg-darker) 0%, rgba(13, 148, 136, 0.05) 100%);
+    background: linear-gradient(160deg, var(--bg-darker) 0%, rgba(20, 184, 166, 0.06) 100%);
     border: 1px solid var(--border-color);
-    border-left: 4px solid var(--accent-teal);
-    border-radius: 10px;
-    padding: 20px;
-    margin-bottom: 16px;
-    box-shadow: 0 6px 16px rgba(0,0,0,0.15);
-    font-size: 1.05rem;
+    border-left: 3px solid var(--accent-teal);
+    border-radius: var(--radius);
+    padding: 16px;
+    margin-bottom: 12px;
+    font-size: 0.92rem;
   }
 
   .spinner { width: 16px; height: 16px; border: 2px solid rgba(160, 174, 192, 0.18); border-top-color: var(--accent-teal); border-radius: 50%; animation: spin 0.8s linear infinite; }
@@ -255,13 +407,15 @@ style.textContent = `
   .panel-gutter:hover { background: var(--accent-teal-dim); }
   .panel-gutter.dragging { background: var(--accent-teal); }
 
-  .topbar-actions { display: flex; gap: 12px; align-items: center; }
-  .segmented { display: flex; border: 1px solid var(--border-color); background: var(--bg-darker); border-radius: 6px; overflow: hidden; box-shadow: inset 0 1px 3px rgba(0,0,0,0.2), 0 1px 1px rgba(255,255,255,0.05); }
-  .segmented .view-tab { min-width: 44px; height: 44px; padding: 0 16px; display: flex; align-items: center; justify-content: center; background: linear-gradient(180deg, var(--bg-panel) 0%, var(--bg-darker) 100%); transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1); border-right: 1px solid var(--border-color); box-shadow: inset 0 1px 0 rgba(255,255,255,0.05); }
-  .segmented .view-tab:hover { background: linear-gradient(180deg, var(--accent-teal-dim) 0%, var(--bg-darker) 100%); color: var(--text-main); }
-  .segmented .view-tab:active { box-shadow: inset 0 2px 4px rgba(0,0,0,0.4); background: var(--bg-darker); }
+  .topbar-actions { display: flex; gap: 10px; align-items: center; }
+  .segmented { display: flex; border: 1px solid var(--border-color); background: var(--bg-darker); border-radius: 999px; overflow: hidden; }
+  .segmented .view-tab { min-width: 40px; height: 36px; padding: 0 12px; display: flex; align-items: center; justify-content: center; background: transparent; border-right: 1px solid var(--border-color); border-radius: 0; }
+  .segmented .view-tab.active { background: var(--accent-teal-dim); color: var(--accent-teal); box-shadow: none; }
+  .segmented .view-tab:hover { background: rgba(255,255,255,0.03); color: var(--text-main); }
   .segmented .view-tab:last-child { border-right: none; }
-  .text-scale-control .view-tab { min-width: 72px; height: 50px; font-size: 1.25rem; font-weight: 800; text-shadow: 0 1px 2px rgba(0,0,0,0.5); }
+  .text-scale-control .view-tab { min-width: 44px; height: 36px; font-size: 0.85rem; font-weight: 700; text-shadow: none; }
+
+  model-viewer { --poster-color: transparent; background-color: transparent; }
 `;
 document.head.appendChild(style);
 
@@ -305,6 +459,11 @@ function initUI(): void {
   document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
     <div class="workspace">
       <header class="topbar">
+        <div class="brand-block">
+          <div class="brand-mark">nequ<span>3D</span></div>
+          <div class="brand-tag" data-i18n="brandTagline"></div>
+        </div>
+
         <div class="telemetry-group">
           <div class="telemetry-item">
             <span class="telemetry-label" data-i18n="gpuEngine"></span>
@@ -322,7 +481,7 @@ function initUI(): void {
           </div>
           <div class="telemetry-item">
             <span class="telemetry-label" data-i18n="pipelineTimer"></span>
-            <span id="process-timer" class="telemetry-value" style="color: var(--accent-teal);">0.0s</span>
+            <span id="process-timer" class="telemetry-value">0.0s</span>
           </div>
         </div>
 
@@ -332,11 +491,11 @@ function initUI(): void {
             <button id="btn-lang-pl" class="view-tab">PL</button>
           </div>
           <div class="segmented text-scale-control">
-            <button id="btn-size-sm" class="view-tab" style="font-size: 0.75rem; font-weight: bold;" data-i18n-title="sizeSmall" data-i18n-aria="sizeSmall">A-</button>
-            <button id="btn-size-md" class="view-tab" style="font-size: 0.95rem; font-weight: bold;" data-i18n-title="sizeMedium" data-i18n-aria="sizeMedium">A</button>
-            <button id="btn-size-lg" class="view-tab" style="font-size: 1.15rem; font-weight: bold;" data-i18n-title="sizeLarge" data-i18n-aria="sizeLarge">A+</button>
+            <button id="btn-size-sm" class="view-tab" data-i18n-title="sizeSmall" data-i18n-aria="sizeSmall">A-</button>
+            <button id="btn-size-md" class="view-tab" data-i18n-title="sizeMedium" data-i18n-aria="sizeMedium">A</button>
+            <button id="btn-size-lg" class="view-tab" data-i18n-title="sizeLarge" data-i18n-aria="sizeLarge">A+</button>
           </div>
-          <button id="theme-toggle" class="technical-button" style="padding: 0; width: 44px; height: 44px; display: grid; place-items: center;" data-i18n-title="themeToggle">${Icons.moon}</button>
+          <button id="theme-toggle" class="technical-button" style="padding: 0; width: 36px; height: 36px; display: grid; place-items: center; border-radius: 999px;" data-i18n-title="themeToggle">${Icons.moon}</button>
         </div>
       </header>
 
@@ -347,33 +506,32 @@ function initUI(): void {
             ${Icons.folder}
             <span data-i18n="loadAssetBtn"></span>
           </button>
-          
-          <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 12px; padding: 12px; background: linear-gradient(145deg, var(--bg-darker) 0%, rgba(13, 148, 136, 0.08) 100%); border: 1px solid var(--accent-teal); border-radius: 6px;">
-            <div style="display: flex; align-items: center; gap: 8px;">
-              <span class="section-label" style="border: none; padding: 0; color: var(--accent-teal); font-weight: bold; letter-spacing: 0.1em;">SKETCHFAB (USDZ)</span>
+          <div id="file-path" class="telemetry-label" style="text-transform: none; word-break: break-all;" data-i18n="noFile"></div>
+
+          <details class="ingest-details">
+            <summary data-i18n="ingestCollapse"></summary>
+            <div class="ingest-body">
+              <input type="text" id="sketchfab-url" data-i18n-placeholder="sketchfabUrl" placeholder="Model URL or UID" class="technical-select">
+              <input type="password" id="sketchfab-token" data-i18n-placeholder="sketchfabToken" placeholder="API Token" class="technical-select">
+              <button id="sketchfab-btn" class="technical-button primary">
+                <span data-i18n="loadSketchfabBtn">Pobierz i Analizuj</span>
+              </button>
+              <div id="sketchfab-status" class="telemetry-label" style="text-transform: none; text-align: center; word-wrap: break-word;"></div>
             </div>
-            <input type="text" id="sketchfab-url" data-i18n-placeholder="sketchfabUrl" placeholder="Model URL or UID" class="technical-select" style="padding: 8px; font-size: 0.65rem; border: 1px solid rgba(13, 148, 136, 0.3);">
-            <input type="password" id="sketchfab-token" data-i18n-placeholder="sketchfabToken" placeholder="API Token" class="technical-select" style="padding: 8px; font-size: 0.65rem; border: 1px solid rgba(13, 148, 136, 0.3);">
-            <button id="sketchfab-btn" class="technical-button primary" style="font-weight: bold; padding: 12px;">
-              <span data-i18n="loadSketchfabBtn">Pobierz i Analizuj</span>
-            </button>
-            <div id="sketchfab-status" style="font-size: 0.6rem; color: var(--text-muted); font-family: var(--font-mono); text-align: center; margin-top: 4px; word-wrap: break-word;"></div>
-          </div>
-          
-          <div id="file-path" class="telemetry-label" style="text-transform: none; word-break: break-all; margin-top: 6px;" data-i18n="noFile"></div>
+          </details>
         </div>
 
         <div class="panel-section">
           <span class="section-label" data-i18n="neuralBitrate"></span>
           <div style="display: flex; justify-content: space-between; align-items: center;">
             <span class="telemetry-label" data-i18n="targetBitrate"></span>
-            <span id="bpp-val" class="telemetry-value" style="font-size: 0.8rem; color: var(--accent-teal);"></span>
+            <span id="bpp-val" class="telemetry-value" style="font-size: 0.75rem;"></span>
           </div>
           <input type="range" id="bpp-slider" min="1" max="8" step="1" value="5">
 
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 8px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 4px;">
             <span class="telemetry-label" data-i18n="trainingSteps"></span>
-            <span id="steps-val" class="telemetry-value" style="font-size: 0.8rem; color: var(--accent-teal);"></span>
+            <span id="steps-val" class="telemetry-value" style="font-size: 0.75rem;"></span>
           </div>
           <input type="range" id="steps-slider" min="50" max="1000" step="50" value="150">
         </div>
@@ -388,61 +546,91 @@ function initUI(): void {
           </select>
         </div>
 
-        <button id="analyze-btn" class="technical-button" style="margin-top: auto; border-color: var(--accent-teal); color: var(--accent-teal);" disabled>
+        <button id="analyze-btn" class="technical-button primary" disabled>
           ${Icons.play}
           <span data-i18n="btnAnalyze"></span>
         </button>
 
-        <div class="panel-section">
+        <div class="panel-section" style="flex: 1; min-height: 0;">
           <span class="section-label" data-i18n="telemetryTitle"></span>
           <div id="output" class="telemetry-table-container"></div>
         </div>
-        </aside>
+      </aside>
 
-        <div class="panel-gutter" data-gutter="left" role="separator" style="grid-column: 1; grid-row: 2; justify-self: end; z-index: 1000; width: 6px; cursor: col-resize;"></div>
+      <div class="panel-gutter" data-gutter="left" role="separator" style="grid-column: 1; grid-row: 2; justify-self: end; z-index: 1000; width: 5px; cursor: col-resize;"></div>
 
-        <main class="viewport panel-center">
-        <div class="viewer-tabs">
-          <button id="tab-mesh" class="view-tab active" data-i18n="tabMesh"></button>
-          <button id="tab-quality" class="view-tab" data-i18n="tabQuality" hidden></button>
-          <div class="segmented" style="margin-left: 16px; border-left: none; border-top: none; border-bottom: none;">
-             <button id="btn-rot-x" class="view-tab" title="Obróć w osi X (Pion)">⟳ X</button>
-             <button id="btn-rot-y" class="view-tab" title="Obróć w osi Y (Poziom)">⟳ Y</button>
-             <button id="btn-rot-z" class="view-tab" title="Obróć w osi Z (Przechył)">⟳ Z</button>
+      <main class="viewport panel-center">
+        <div class="viewer-chrome">
+          <div class="viewer-tabs">
+            <button id="tab-mesh" class="view-tab active" data-i18n="tabMesh"></button>
+            <button id="tab-quality" class="view-tab" data-i18n="tabQuality" hidden></button>
+            <button id="btn-rot-x" class="view-tab" title="Rotate X">X</button>
+            <button id="btn-rot-y" class="view-tab" title="Rotate Y">Y</button>
+            <button id="btn-rot-z" class="view-tab" title="Rotate Z">Z</button>
           </div>
-          <div id="fps-counter" style="margin-left: auto; padding: 14px 28px; font-family: var(--font-mono); font-size: 0.7rem; color: var(--accent-teal); font-weight: bold;">0 FPS</div>
+          <div id="dims-badge" class="dims-badge" hidden>—</div>
+          <div id="fps-counter" class="fps-pill">0 FPS</div>
         </div>
 
         <div id="viewer-placeholder" class="viewer-placeholder">
           <div data-i18n="viewerEmptyTitle"></div>
         </div>
 
-        <model-viewer id="viewer-usd" class="viewer-layer" style="display: none;" camera-controls auto-rotate exposure="1.05" shadow-intensity="0.6"></model-viewer>
+        <model-viewer id="viewer-usd" class="viewer-layer" style="display: none;" camera-controls exposure="1.05" shadow-intensity="0.45" interaction-prompt="none"></model-viewer>
 
         <div id="viewer-quality" class="comparison-wrapper" style="display: none;">
           <div id="comparison-layer" class="comparison-layer">
-              <model-viewer id="viewer-orig" class="comp-img" camera-controls exposure="1.05" shadow-intensity="0.6" style="width: 100%; height: 100%;"></model-viewer>
-              <model-viewer id="viewer-ntc" class="comp-img img-after" disable-zoom disable-pan disable-tap exposure="1.05" shadow-intensity="0.6" style="width: 100%; height: 100%; pointer-events: none;"></model-viewer>
-              <div id="comp-divider" class="comp-divider"></div>
-
-              <div class="telemetry-label" style="position: absolute; top: 60px; left: 20px; z-index: 9999; background: rgba(15, 23, 42, 0.8); backdrop-filter: blur(4px); border-radius: 4px; padding: 6px 12px; pointer-events: none; border: 1px solid var(--border-color);" data-i18n="origLabel"></div>
-              <div class="telemetry-label" style="position: absolute; top: 60px; right: 20px; z-index: 9999; background: rgba(15, 23, 42, 0.8); backdrop-filter: blur(4px); border-radius: 4px; padding: 6px 12px; pointer-events: none; border: 1px solid var(--border-color);" data-i18n="ntcLabel"></div>
+            <model-viewer id="viewer-orig" class="comp-img" camera-controls exposure="1.05" shadow-intensity="0.45" style="width: 100%; height: 100%;" interaction-prompt="none"></model-viewer>
+            <model-viewer id="viewer-ntc" class="comp-img img-after" disable-zoom disable-pan disable-tap exposure="1.05" shadow-intensity="0.45" style="width: 100%; height: 100%; pointer-events: none;"></model-viewer>
+            <div id="comp-divider" class="comp-divider"></div>
+            <div class="telemetry-label" style="position: absolute; top: 70px; left: 18px; z-index: 20; background: var(--glass); backdrop-filter: blur(8px); border-radius: 999px; padding: 6px 12px; pointer-events: none; border: 1px solid var(--border-color);" data-i18n="origLabel"></div>
+            <div class="telemetry-label" style="position: absolute; top: 70px; right: 18px; z-index: 20; background: var(--glass); backdrop-filter: blur(8px); border-radius: 999px; padding: 6px 12px; pointer-events: none; border: 1px solid var(--border-color);" data-i18n="ntcLabel"></div>
           </div>
         </div>
-        </main>
 
-        <div class="panel-gutter" data-gutter="right" role="separator" style="grid-column: 3; grid-row: 2; justify-self: start; z-index: 1000; width: 6px; cursor: col-resize;"></div>
+        <div class="viewport-toolbar" id="viewport-toolbar">
+          <button type="button" class="tool-btn active" data-tool="orbit" data-i18n="toolOrbit"></button>
+          <button type="button" class="tool-btn" data-tool="measure" data-i18n="toolMeasure"></button>
+          <button type="button" class="tool-btn" data-tool="section" data-i18n="toolSection"></button>
+          <div class="tool-sep"></div>
+          <button type="button" class="tool-btn" id="btn-clear-measure" data-i18n="measureClear"></button>
+        </div>
 
-        <aside class="rightpanel panel-right">
-        <div class="panel-section" style="height: 100%;">
+        <div id="section-rail" class="section-rail" aria-hidden="true">
+          <input type="range" id="section-slider" min="0" max="100" value="50" orient="vertical" />
+        </div>
+      </main>
+
+      <div class="panel-gutter" data-gutter="right" role="separator" style="grid-column: 3; grid-row: 2; justify-self: start; z-index: 1000; width: 5px; cursor: col-resize;"></div>
+
+      <aside class="rightpanel panel-right">
+        <div class="panel-section">
+          <span class="section-label" data-i18n="toolsTitle"></span>
+          <p id="measure-hint" class="measure-hint" data-i18n="measureHint"></p>
+          <div class="section-axis-row" id="section-axis-row">
+            <button type="button" class="axis-chip" data-axis="x">X</button>
+            <button type="button" class="axis-chip active" data-axis="y">Y</button>
+            <button type="button" class="axis-chip" data-axis="z">Z</button>
+          </div>
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <span class="telemetry-label" data-i18n="sectionDepth"></span>
+            <span id="section-val" class="telemetry-value" style="font-size: 0.72rem;">50%</span>
+          </div>
+          <input type="range" id="section-slider-panel" min="0" max="100" value="50">
+          <div id="measure-list" class="measure-list">
+            <div class="measure-hint" data-i18n="measureEmpty"></div>
+          </div>
+        </div>
+
+        <div class="panel-section" style="flex: 1; min-height: 0; display: flex; flex-direction: column;">
           <span class="section-label" data-i18n="aiTitle"></span>
-          <div id="ai-output" style="flex: 1; overflow-y: auto; padding-right: 12px;">
+          <div id="ai-output" style="flex: 1; overflow-y: auto;">
             <span style="opacity: 0.5; font-style: italic;" data-i18n="aiEmpty"></span>
           </div>
         </div>
-        </aside>
-        </div>
-        `;
+      </aside>
+    </div>
+  `;
 
   document.body.dataset.theme = "dark";
 
@@ -452,6 +640,7 @@ function initUI(): void {
   updateLanguageButtons();
   updateBppLabel();
   attachEventListeners();
+  initViewerToolsUI();
   initResizablePanels();
   initComparisonResize();
   startFpsCounter();
@@ -471,6 +660,144 @@ function startFpsCounter() {
     requestAnimationFrame(loop);
   }
   requestAnimationFrame(loop);
+}
+
+function initViewerToolsUI(): void {
+  const toolbar = getEl<HTMLDivElement>("viewport-toolbar");
+  toolbar.querySelectorAll<HTMLButtonElement>("[data-tool]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const mode = btn.dataset.tool as ToolMode;
+      if (!mode) return;
+      activateToolMode(mode);
+    });
+  });
+
+  getEl<HTMLButtonElement>("btn-clear-measure").addEventListener("click", () => {
+    clearMeasurements();
+    renderMeasureList([]);
+    setMeasureHint(false);
+  });
+
+  const syncSectionSliders = (raw: string) => {
+    const t = Number(raw) / 100;
+    setSectionT(t);
+    getEl<HTMLInputElement>("section-slider").value = raw;
+    getEl<HTMLInputElement>("section-slider-panel").value = raw;
+    getEl("section-val").textContent = `${raw}%`;
+    if (!isSectionEnabled()) {
+      setSectionEnabled(true);
+      activateToolMode("section");
+    }
+  };
+
+  getEl<HTMLInputElement>("section-slider").addEventListener("input", (e) => {
+    syncSectionSliders((e.target as HTMLInputElement).value);
+  });
+  getEl<HTMLInputElement>("section-slider-panel").addEventListener(
+    "input",
+    (e) => {
+      syncSectionSliders((e.target as HTMLInputElement).value);
+    },
+  );
+
+  getEl("section-axis-row")
+    .querySelectorAll<HTMLButtonElement>("[data-axis]")
+    .forEach((chip) => {
+      chip.addEventListener("click", () => {
+        const axis = chip.dataset.axis as SectionAxis;
+        if (!axis) return;
+        setSectionAxis(axis);
+        getEl("section-axis-row")
+          .querySelectorAll(".axis-chip")
+          .forEach((el) => el.classList.remove("active"));
+        chip.classList.add("active");
+        if (!isSectionEnabled()) {
+          setSectionEnabled(true);
+          activateToolMode("section");
+        } else {
+          applySectionPlane();
+        }
+      });
+    });
+
+  setMeasurementsListener((items) => renderMeasureList(items));
+  setPendingListener((pending) => setMeasureHint(pending));
+
+  const viewer = getEl("viewer-usd") as any;
+  bindViewerTools(viewer);
+  viewer.addEventListener("load", () => {
+    bindViewerTools(viewer);
+    updateDimsBadge(viewer);
+    if (isSectionEnabled()) applySectionPlane();
+  });
+
+  activateToolMode("orbit");
+  renderMeasureList(getMeasurements());
+}
+
+function activateToolMode(mode: ToolMode): void {
+  setToolMode(mode);
+  if (mode === "section") setSectionEnabled(true);
+  if (mode === "orbit") {
+    // keep section if already on; only hide rail when leaving section tool
+  }
+
+  document.querySelectorAll<HTMLButtonElement>("[data-tool]").forEach((btn) => {
+    btn.classList.toggle("active", btn.dataset.tool === mode);
+  });
+
+  const rail = getEl<HTMLDivElement>("section-rail");
+  rail.classList.toggle("visible", mode === "section");
+  rail.setAttribute("aria-hidden", mode === "section" ? "false" : "true");
+
+  if (mode === "section") {
+    const pct = Math.round(getSectionT() * 100);
+    getEl<HTMLInputElement>("section-slider").value = String(pct);
+    getEl<HTMLInputElement>("section-slider-panel").value = String(pct);
+    getEl("section-val").textContent = `${pct}%`;
+    applySectionPlane();
+  }
+}
+
+function setMeasureHint(pending: boolean): void {
+  const hint = getEl<HTMLParagraphElement>("measure-hint");
+  hint.classList.toggle("pending", pending);
+  hint.setAttribute(
+    "data-i18n",
+    pending ? "measurePending" : "measureHint",
+  );
+  hint.textContent = pending
+    ? IntLayer.t.measurePending
+    : IntLayer.t.measureHint;
+}
+
+function renderMeasureList(items: Measurement[]): void {
+  const list = getEl<HTMLDivElement>("measure-list");
+  if (!items.length) {
+    list.innerHTML = `<div class="measure-hint" data-i18n="measureEmpty">${IntLayer.t.measureEmpty}</div>`;
+    return;
+  }
+  list.innerHTML = items
+    .map(
+      (m, i) => `
+      <div class="measure-row">
+        <span>#${i + 1}</span>
+        <strong>${formatDistance(m.distance)}</strong>
+      </div>`,
+    )
+    .join("");
+}
+
+function updateDimsBadge(viewer: any): void {
+  const badge = getEl<HTMLDivElement>("dims-badge");
+  const extents = readModelExtents(viewer);
+  if (!extents) {
+    badge.hidden = true;
+    return;
+  }
+  const { size } = extents;
+  badge.hidden = false;
+  badge.textContent = `${IntLayer.t.dimsLabel}: ${formatDistance(size.x)} × ${formatDistance(size.y)} × ${formatDistance(size.z)}`;
 }
 
 function updateViewerOrientations(): void {
@@ -784,6 +1111,8 @@ async function hydrateViewers(telemetry: PipelineTelemetry): Promise<void> {
       "load",
       async () => {
         if (viewerUSD.src !== meshUrl) return; // Prevent race conditions
+        bindViewerTools(viewerUSD);
+        updateDimsBadge(viewerUSD);
         const material = viewerUSD.model?.materials[0];
         if (material) {
           material.pbrMetallicRoughness.setBaseColorFactor([1, 1, 1, 1]);
@@ -808,6 +1137,7 @@ async function hydrateViewers(telemetry: PipelineTelemetry): Promise<void> {
             }
           }
         }
+        if (isSectionEnabled()) applySectionPlane();
       },
       { once: true },
     );
@@ -1323,6 +1653,9 @@ function setLanguage(lang: Language): void {
   IntLayer.setLanguage(lang);
   updateLanguageButtons();
   updateBppLabel();
+  setMeasureHint(false);
+  renderMeasureList(getMeasurements());
+  updateDimsBadge(getEl("viewer-usd") as any);
 
   // Re-render telemetry immediately in new language
   if (currentTelemetryData) {
