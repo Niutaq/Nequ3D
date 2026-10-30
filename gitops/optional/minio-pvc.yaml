@@ -1,0 +1,13 @@
+# Optional migration target. Do not mount into the existing deployment before
+# backing up its current /data. See docs/poprawki-2026-10-18.md.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: minio-data
+  namespace: minio
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 20Gi

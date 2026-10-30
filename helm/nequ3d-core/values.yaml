@@ -1,5 +1,9 @@
 replicaCount: 1
 
+# Kubernetes secrets are namespace-scoped: provision this in the Core namespace.
+minio:
+  existingSecret: minio-credentials
+
 image:
   repository: nequ3d-core
   pullPolicy: IfNotPresent

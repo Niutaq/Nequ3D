@@ -1,0 +1,15 @@
+# Strategic merge patch, applied ONLY after a verified off-pod backup.
+spec:
+  strategy:
+    type: Recreate
+  template:
+    spec:
+      containers:
+        - name: minio
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: minio-data
