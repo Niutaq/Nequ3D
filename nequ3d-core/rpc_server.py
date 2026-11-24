@@ -38,6 +38,15 @@ ACTIVE_GRPC_REQUESTS = Gauge(
 PROCESSED_MODELS = Gauge(
     "nequ3d_processed_models_total", "Total number of models processed"
 )
+LAST_NTC_PSNR_DB = Gauge(
+    "nequ3d_last_ntc_psnr_db", "Average PSNR (dB) of the latest NTC compression run"
+)
+LAST_NTC_SSIM = Gauge(
+    "nequ3d_last_ntc_ssim", "Average SSIM (0..1) of the latest NTC compression run"
+)
+LAST_NTC_VRAM_REDUCTION = Gauge(
+    "nequ3d_last_ntc_vram_reduction_percent", "Average VRAM reduction (%) of the latest NTC run"
+)
 
 sys.path.append(os.path.join(os.path.dirname(__file__), "pipeline_rpc"))
 import re
@@ -109,6 +118,20 @@ class NtcPipelineService(pipeline_pb2_grpc.NtcPipelineServiceServicer):
                 proxy_glb_s3_key = ""
                 try:
                     telemetry_dict = json.loads(telemetry_json)
+                    if isinstance(telemetry_dict.get("avg_psnr_db"), (int, float)):
+                        LAST_NTC_PSNR_DB.set(float(telemetry_dict["avg_psnr_db"]))
+                    if isinstance(telemetry_dict.get("avg_ssim"), (int, float)):
+                        LAST_NTC_SSIM.set(float(telemetry_dict["avg_ssim"]))
+                    ntc_files = telemetry_dict.get("ntc_compressed_files") or []
+                    reds = []
+                    for item in ntc_files:
+                        raw_red = str(item.get("vram_reduction", "")).replace("%", "").strip()
+                        try:
+                            reds.append(float(raw_red))
+                        except ValueError:
+                            pass
+                    if reds:
+                        LAST_NTC_VRAM_REDUCTION.set(sum(reds) / len(reds))
                     proxy_path = telemetry_dict.get("proxy_glb_path")
                     if proxy_path and os.path.exists(proxy_path):
                         upload_key = f"proxy_{uuid.uuid4().hex}_{os.path.basename(proxy_path)}"

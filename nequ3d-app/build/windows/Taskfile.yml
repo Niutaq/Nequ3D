@@ -52,7 +52,7 @@ tasks:
         vars:
           ARCH: '{{.ARCH}}'
       - '{{if eq .OBFUSCATED "true"}}garble {{.GARBLE_ARGS}} build{{else}}go build{{end}} {{.BUILD_FLAGS}} -o "{{.BIN_DIR}}/{{.APP_NAME}}.exe"'
-      - cmd: powershell Remove-item *.syso
+      - cmd: powershell -NoProfile -Command "Remove-Item *.syso -ErrorAction SilentlyContinue"
         platforms: [windows]
       - cmd: rm -f *.syso
         platforms: [linux, darwin]
@@ -141,7 +141,7 @@ tasks:
     cmds:
       - |-
         wails3 tool msix \
-          --config "{{.ROOT_DIR}}/wails.json" \
+          --config "{{.ROOT_DIR}}/build/config.yml" \
           --name "{{.APP_NAME}}" \
           --executable "{{.ROOT_DIR}}/{{.BIN_DIR}}/{{.APP_NAME}}.exe" \
           --arch "{{.ARCH}}" \

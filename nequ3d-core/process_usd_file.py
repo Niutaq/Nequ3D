@@ -12,6 +12,11 @@ import trimesh
 from PIL import Image
 from pxr import Usd, UsdGeom, UsdShade, Gf  # type: ignore
 
+from integrity import write_integrity_sidecar
+from omniverse_export import package_omniverse_export
+from twin_manifest import build_twin_manifest
+from usd_layers import persist_twin_layers
+
 
 def unpack_usdz(usdz_path):
     """
@@ -102,6 +107,12 @@ def generate_proxy_mesh(usd_path, suffix="_proxy.glb", use_reconstructed=False):
             return None
 
         base_dir = os.path.dirname(usd_path)
+        meters_per_unit = float(UsdGeom.GetStageMetersPerUnit(stage) or 1.0)
+        scale_to_meters = (
+            meters_per_unit
+            if meters_per_unit > 0 and abs(meters_per_unit - 1.0) > 1e-6
+            else 1.0
+        )
         meshes = []
 
         for prim in stage.Traverse():
@@ -115,17 +126,19 @@ def generate_proxy_mesh(usd_path, suffix="_proxy.glb", use_reconstructed=False):
                     continue
 
                 points = np.array(points)
-                
+
                 # Apply local-to-world transform
                 time_code = Usd.TimeCode.Default()
                 xform_cache = UsdGeom.XformCache(time_code)
                 world_transform = xform_cache.GetLocalToWorldTransform(prim)
-                
+
                 # Convert GfMatrix4d to numpy array and multiply points (row-major)
                 matrix = np.array(world_transform)
                 ones = np.ones((points.shape[0], 1))
                 points_4 = np.hstack([points, ones])
                 points = points_4.dot(matrix)[:, :3]
+                if scale_to_meters != 1.0:
+                    points = points * scale_to_meters
 
                 counts = np.array(face_counts)
                 indices = np.array(face_indices)
@@ -287,6 +300,148 @@ def generate_proxy_mesh(usd_path, suffix="_proxy.glb", use_reconstructed=False):
     return None
 
 
+def generate_gaussian_splat(proxy_path, num_splats=100000):
+    """
+    Converts the generated _proxy.glb mesh into a colored 3D Gaussian Splat
+    representation (.splat, 32 bytes per splat, gsplat OpenCV Y-down convention)
+    by area-weighted surface sampling so the 3DGS and Hybrid tabs work without
+    manually loading a separate .splat/.ply asset.
+    """
+    if not proxy_path or not os.path.exists(proxy_path):
+        return None
+
+    base = proxy_path[:-10] if proxy_path.endswith("_proxy.glb") else proxy_path.rsplit(".", 1)[0]
+    splat_path = base + "_gaussians.splat"
+    try:
+        loaded = trimesh.load(proxy_path, force="scene")
+        geoms = (
+            list(loaded.dump())
+            if isinstance(loaded, trimesh.Scene)
+            else [loaded]
+        )
+        geoms = [
+            g for g in geoms
+            if isinstance(g, trimesh.Trimesh) and len(g.faces) > 0 and g.area > 0
+        ]
+        if not geoms:
+            return None
+
+        areas = np.array([float(g.area) for g in geoms], dtype=np.float64)
+        total_area = float(areas.sum())
+        if total_area <= 0:
+            return None
+
+        counts = np.maximum(1, np.round(num_splats * areas / total_area).astype(int))
+        all_pts = []
+        all_rgba = []
+        for g, cnt in zip(geoms, counts):
+            sampled = trimesh.sample.sample_surface(g, int(cnt), sample_color=True)
+            pts = np.asarray(sampled[0], dtype=np.float32)
+            colors = sampled[2] if len(sampled) > 2 and sampled[2] is not None else None
+            if colors is None or len(colors) != len(pts):
+                rgba = np.full((len(pts), 4), [200, 210, 215, 240], dtype=np.uint8)
+            else:
+                rgba = np.asarray(colors, dtype=np.uint8)
+                if rgba.shape[1] == 3:
+                    alpha = np.full((len(pts), 1), 240, dtype=np.uint8)
+                    rgba = np.hstack([rgba, alpha])
+                else:
+                    rgba[:, 3] = 240
+            all_pts.append(pts)
+            all_rgba.append(rgba)
+
+        pts = np.vstack(all_pts)
+        rgba = np.vstack(all_rgba)
+        n = len(pts)
+        if n == 0:
+            return None
+
+        # Center at bounding box and convert glTF/Three.js Y-up to gsplat OpenCV Y-down
+        bbox_min = pts.min(axis=0)
+        bbox_max = pts.max(axis=0)
+        center = (bbox_min + bbox_max) * 0.5
+        rel = pts - center
+        pos_cv = np.empty_like(rel, dtype="<f4")
+        pos_cv[:, 0] = rel[:, 0]
+        pos_cv[:, 1] = -rel[:, 1]
+        pos_cv[:, 2] = -rel[:, 2]
+
+        max_dim = float(np.max(bbox_max - bbox_min))
+        iso_scale = float(np.sqrt(total_area / (n * np.pi)) * 1.15)
+        iso_scale = float(np.clip(iso_scale, max(max_dim * 0.0012, 0.003), max(max_dim * 0.0085, 0.015)))
+
+        dtype = np.dtype([
+            ("pos", "<f4", 3),
+            ("scale", "<f4", 3),
+            ("rgba", "u1", 4),
+            ("rot", "u1", 4),
+        ])
+        records = np.empty(n, dtype=dtype)
+        records["pos"] = pos_cv
+        records["scale"] = iso_scale
+        records["rgba"] = rgba
+        records["rot"] = np.array([255, 128, 128, 128], dtype=np.uint8)
+
+        with open(splat_path, "wb") as f:
+            f.write(records.tobytes())
+        print(f"[Core Python] Generated 3DGS proxy splat ({n} splats): {splat_path}")
+        return splat_path
+    except Exception as e:
+        print(f"[Core Python] Warning: 3DGS splat conversion failed: {e}")
+        return None
+
+
+def compute_image_quality_metrics(orig_path, recon_path):
+    """
+    Computes objective PSNR (dB) and windowed SSIM (0..1) between original and
+    NTC-reconstructed textures using pure NumPy + Pillow (no scikit-image needed).
+    """
+    if not orig_path or not recon_path:
+        return None, None
+    if not os.path.exists(orig_path) or not os.path.exists(recon_path):
+        return None, None
+    try:
+        img_a = Image.open(orig_path).convert("RGB")
+        img_b = Image.open(recon_path).convert("RGB")
+        if img_a.size != img_b.size:
+            img_b = img_b.resize(img_a.size, Image.Resampling.BILINEAR)
+
+        a = np.asarray(img_a, dtype=np.float64)
+        b = np.asarray(img_b, dtype=np.float64)
+        mse = float(np.mean((a - b) ** 2))
+        if mse <= 1e-12:
+            psnr_db = 99.9
+        else:
+            psnr_db = float(10.0 * np.log10((255.0 ** 2) / mse))
+
+        # BT.601 luma for fast 8x8 block SSIM
+        ya = 0.299 * a[:, :, 0] + 0.587 * a[:, :, 1] + 0.114 * a[:, :, 2]
+        yb = 0.299 * b[:, :, 0] + 0.587 * b[:, :, 1] + 0.114 * b[:, :, 2]
+        h, w = ya.shape
+        bh, bw = (h // 8) * 8, (w // 8) * 8
+        if bh >= 8 and bw >= 8:
+            pa = ya[:bh, :bw].reshape(bh // 8, 8, bw // 8, 8).transpose(0, 2, 1, 3).reshape(-1, 64)
+            pb = yb[:bh, :bw].reshape(bh // 8, 8, bw // 8, 8).transpose(0, 2, 1, 3).reshape(-1, 64)
+            mu_a = pa.mean(axis=1)
+            mu_b = pb.mean(axis=1)
+            va = pa.var(axis=1)
+            vb = pb.var(axis=1)
+            cov = ((pa - mu_a[:, None]) * (pb - mu_b[:, None])).mean(axis=1)
+            c1 = (0.01 * 255.0) ** 2
+            c2 = (0.03 * 255.0) ** 2
+            ssim_map = ((2.0 * mu_a * mu_b + c1) * (2.0 * cov + c2)) / (
+                (mu_a ** 2 + mu_b ** 2 + c1) * (va + vb + c2)
+            )
+            ssim_val = float(np.clip(np.mean(ssim_map), 0.0, 1.0))
+        else:
+            ssim_val = None
+
+        return round(psnr_db, 2), (round(ssim_val, 4) if ssim_val is not None else None)
+    except Exception as e:
+        print(f"[Core Python] Warning: PSNR/SSIM computation failed: {e}")
+        return None, None
+
+
 def run_ntc_compression(usd_path, texture_paths, target_bpp, target_steps="150"):
     """
     Executes the native C++ NVIDIA RTXNTC compressor compiled inside the Docker container.
@@ -388,6 +543,14 @@ def run_ntc_compression(usd_path, texture_paths, target_bpp, target_steps="150")
                 if "PSNR" in line or "psnr" in line or "Avg" in line:
                     psnr_value = line.strip()
 
+            psnr_db, ssim_val = compute_image_quality_metrics(
+                actual_tex_path, reconstructed_img_path
+            )
+            if psnr_db is not None:
+                psnr_value = f"PSNR: {psnr_db:.2f} dB" + (
+                    f" | SSIM: {ssim_val:.4f}" if ssim_val is not None else ""
+                )
+
             compressed_assets.append(
                 {
                     "original": base_name,
@@ -400,6 +563,8 @@ def run_ntc_compression(usd_path, texture_paths, target_bpp, target_steps="150")
                     "ntc_vram_mb": round(ntc_size_mb, 2),
                     "vram_saved_mb": round(vram_saved, 2),
                     "vram_reduction": f"{round(reduction, 1)}%",
+                    "psnr_db": psnr_db,
+                    "ssim": ssim_val,
                     "metrics": psnr_value,
                 }
             )
@@ -440,6 +605,12 @@ def summarize_ntc_state(telemetry, found_textures):
     if has_quality:
         telemetry["texture_processing_status"] = "compressed"
         telemetry["ntc_bypass_reason"] = ""
+        psnrs = [a["psnr_db"] for a in compressed_assets if isinstance(a.get("psnr_db"), (int, float))]
+        ssims = [a["ssim"] for a in compressed_assets if isinstance(a.get("ssim"), (int, float))]
+        if psnrs:
+            telemetry["avg_psnr_db"] = round(sum(psnrs) / len(psnrs), 2)
+        if ssims:
+            telemetry["avg_ssim"] = round(sum(ssims) / len(ssims), 4)
         return
 
     if not found_textures:
@@ -488,8 +659,9 @@ def analyze_usd_stage(file_path, target_bpp="5", target_steps="150"):
         return json.dumps({"error": f"Failed to open USD stage: {file_path}"})
 
     telemetry = {
-        "schema_version": 2,
+        "schema_version": 3,
         "status": "success",
+        "source_asset": os.environ.get("NEQU3D_SOURCE_ASSET") or file_path,
         "total_prim_count": 0,
         "mesh_count": 0,
         "material_count": 0,
@@ -504,6 +676,10 @@ def analyze_usd_stage(file_path, target_bpp="5", target_steps="150"):
         "texture_processing_status": "pending",
         "proxy_glb_path": "",
         "proxy_ntc_glb_path": "",
+        "zones": [],
+        "twin_manifest_path": "",
+        "annotations_usda": "",
+        "composed_usda": "",
     }
 
     found_textures = []
@@ -553,6 +729,10 @@ def analyze_usd_stage(file_path, target_bpp="5", target_steps="150"):
     )
     if proxy_path:
         telemetry["proxy_glb_path"] = proxy_path
+        telemetry["proxy_scaled_to_meters"] = True
+        splat_path = generate_gaussian_splat(proxy_path)
+        if splat_path:
+            telemetry["environment_splat_path"] = splat_path
 
     if telemetry["has_ntc_quality"]:
         print("[Core Python] Action: Generating Proxy NTC Mesh (GLB)...")
@@ -561,6 +741,64 @@ def analyze_usd_stage(file_path, target_bpp="5", target_steps="150"):
         )
         if proxy_ntc_path:
             telemetry["proxy_ntc_glb_path"] = proxy_ntc_path
+
+    print("[Core Python] Action: Building twin_manifest + OpenUSD annotation layers...")
+    source_asset = telemetry.get("source_asset") or file_path
+    try:
+        manifest = build_twin_manifest(
+            file_path, telemetry=telemetry, source_asset=source_asset
+        )
+        layer_paths = persist_twin_layers(file_path, manifest)
+        telemetry["twin_manifest"] = {
+            "zone_count": len(manifest.get("zones") or []),
+            "prim_count": len(manifest.get("prims") or []),
+            "up_axis": manifest.get("up_axis"),
+            "meters_per_unit": manifest.get("meters_per_unit"),
+            "integrity": manifest.get("integrity"),
+        }
+        telemetry["twin_manifest_path"] = layer_paths.get("twin_manifest_path", "")
+        telemetry["annotations_usda"] = layer_paths.get("annotations_usda", "")
+        telemetry["composed_usda"] = layer_paths.get("composed_usda", "")
+        telemetry["twin_dir"] = layer_paths.get("twin_dir", "")
+        telemetry["zones"] = [
+            {
+                "id": z.get("id"),
+                "label": z.get("label"),
+                "status": z.get("status"),
+                "prim_count": len(z.get("prim_paths") or []),
+                "bbox": z.get("bbox"),
+            }
+            for z in (manifest.get("zones") or [])
+        ]
+
+        export_root = os.environ.get(
+            "NEQU3D_OMNIVERSE_EXPORT",
+            os.path.join(os.path.dirname(file_path), "..", "exports", "omniverse"),
+        )
+        export_root = os.path.abspath(export_root)
+        asset_name = os.path.splitext(os.path.basename(source_asset))[0]
+        export_info = package_omniverse_export(
+            layer_paths["twin_dir"],
+            export_root,
+            asset_name,
+            manifest,
+            extra_files=[
+                p
+                for p in (
+                    telemetry.get("proxy_glb_path"),
+                    telemetry.get("proxy_ntc_glb_path"),
+                )
+                if p
+            ],
+        )
+        telemetry["omniverse_export_dir"] = export_info.get("export_dir", "")
+        telemetry["simready_ready"] = bool(
+            (export_info.get("checklist") or {}).get("ready_for_kit_import")
+        )
+        telemetry["simready_checklist"] = export_info.get("checklist")
+    except Exception as e:
+        print(f"[Core Python] Warning: twin/Omniverse packaging failed: {e}")
+        telemetry["twin_error"] = str(e)
 
     print("Telemetry: " + json.dumps(telemetry))
 
@@ -574,6 +812,17 @@ if __name__ == "__main__":
         # Automatic USDZ archive extraction
         working_path = unpack_usdz(raw_path)
 
+        # Integrity sidecar for Reality Scan / source asset (NetSecOps)
+        try:
+            write_integrity_sidecar(
+                raw_path, meta={"pipeline": "nequ3d-core", "kind": "source_scan"}
+            )
+        except Exception as e:
+            print(f"[Core Python] Warning: integrity sidecar failed: {e}")
+
+        # Stash source for twin_manifest
+        # analyze_usd_stage reads telemetry source via optional env
+        os.environ["NEQU3D_SOURCE_ASSET"] = raw_path
         analyze_usd_stage(working_path, bpp_target, steps_target)
     else:
         print("[ERROR] Missing input file path")

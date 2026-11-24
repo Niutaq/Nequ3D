@@ -31,7 +31,7 @@ func StartCoreWorker() {
 		"-e", "MINIO_ENDPOINT=http://host.docker.internal:9000",
 		"-p", "50051:50051",
 		"-p", "8001:8001",
-		"nequ3d-core:v5",
+		"nequ3d-core:v4",
 	)
 
 	stdout, err := coreWorkerCmd.StdoutPipe()

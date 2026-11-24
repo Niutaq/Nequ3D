@@ -20,6 +20,16 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           command: ["python3", "-u", "rpc_server.py"]
           env:
+            - name: MINIO_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.minio.existingSecret }}
+                  key: rootUser
+            - name: MINIO_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.minio.existingSecret }}
+                  key: rootPassword
             - name: MINIO_ENDPOINT
               value: "http://minio.minio.svc.cluster.local:9000"
             - name: NVIDIA_VISIBLE_DEVICES

@@ -1,14 +1,24 @@
-# Binaries
+# Binaries & archives
 **/node_modules/
 .tools/
 ntc_log.txt
 nequ3d-core/venv/
+nequ3d-core/RTXNTC/
+test-env/
 *.exe
 *.bin
+*.tar.gz
 backend/server.exe
+
+# Local cluster certs & build artifacts
+pub-cert.pem
+nequ3d-app/frontend/dist/
 
 # Data
 data/
+experiments/results/*
+!experiments/results/.gitkeep
+exports/
 
 # Python Virtual Environment
 processing/venv/

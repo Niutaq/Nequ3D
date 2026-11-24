@@ -1,11 +1,13 @@
+# Pins from nvidia/LocateAnything-3B model card (transformers v5 breaks remote code).
 fastapi
 uvicorn
 python-multipart
-torch
-transformers
+transformers==4.57.1
 accelerate
-Pillow
+Pillow==11.1.0
 peft
-decord
-opencv-python-headless
-lmdb
+decord==0.6.0
+opencv-python-headless==4.11.0.86
+lmdb==1.7.5
+numpy==1.26.4
+huggingface_hub

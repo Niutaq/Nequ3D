@@ -1,0 +1,10 @@
+{
+  "description": "Copy to fixtures.json and point at local Reality Scan USDZ files under data/objects.",
+  "assets": [
+    {
+      "id": "sample-room",
+      "path": "data/objects/sample-room.usdz",
+      "notes": "Replace with a real Reality Scan export"
+    }
+  ]
+}

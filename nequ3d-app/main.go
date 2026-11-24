@@ -16,6 +16,9 @@ import (
 //go:embed all:frontend/dist
 var assets embed.FS
 
+//go:embed build/appicon.png
+var appIcon []byte
+
 // startLocalAssetServer exposes only registered preview assets on loopback.
 func startLocalAssetServer(urlCh chan<- string) {
 	mux := http.NewServeMux()
@@ -38,7 +41,8 @@ func main() {
 
 	app := application.New(application.Options{
 		Name:        "nequ3d-app",
-		Description: "Nequ3D Edge-to-Core Asset Pipeline",
+		Description: "Nequ3D Building Renovation Digital Twin",
+		Icon:        appIcon,
 		Services: []application.Service{
 			application.NewService(NewApp()),
 		},
