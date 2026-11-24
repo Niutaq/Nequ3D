@@ -1,4 +1,4 @@
-# Nequ3D — Building Renovation Digital Twin
+<h1 align="center">Nequ3D — Building Renovation Digital Twin</h1>
 
 <div align="center">
   <img width="250" height="250" alt="Nequ3D logo" src="https://github.com/user-attachments/assets/cad8e101-5116-45e5-8f56-742ff72a3a07" />
