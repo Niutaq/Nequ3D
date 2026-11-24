@@ -2,21 +2,26 @@ name: CI
 
 on:
   push:
-    branches: ["main", "develop", "feature/**"]
-  pull_request:
     branches: ["main"]
+  pull_request:
+    branches: ["main", "develop"]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   frontend:
     name: Frontend (Wails Bindings, TypeScript & Vite)
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: nequ3d-app/go.mod
           cache-dependency-path: nequ3d-app/go.sum
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
@@ -38,11 +43,16 @@ jobs:
       run:
         working-directory: nequ3d-app
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: nequ3d-app/go.mod
           cache-dependency-path: nequ3d-app/go.sum
+      - name: Prepare placeholder frontend/dist for go:embed
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path frontend/dist | Out-Null
+          Set-Content -Path frontend/dist/index.html -Value "<!doctype html><html></html>"
       - run: go vet .
       - run: go test -v . ./pkg/... ./pipeline_rpc/...
 
@@ -53,8 +63,8 @@ jobs:
       run:
         working-directory: nequ3d-core
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - run: python -m py_compile process_usd_file.py rpc_server.py integrity.py omniverse_export.py twin_manifest.py usd_layers.py
@@ -65,6 +75,6 @@ jobs:
     name: Helm Chart Lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: azure/setup-helm@v4
+      - uses: actions/checkout@v7
+      - uses: azure/setup-helm@v5
       - run: helm lint helm/nequ3d-core
