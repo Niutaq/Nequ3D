@@ -29,14 +29,20 @@ Nequ3D turns **Reality Scan** captures into an **OpenUSD Building Renovation Dig
 | Omniverse interop | Filesystem export + OpenUSD / SimReady-lite validation card for Kit |
 | NetSecOps | SHA-256 sidecars, MinIO metadata, loopback preview tokens |
 
-## Stack pins
+## Architecture & Tech Stack
 
-| Component | Version |
-| --- | --- |
-| Wails (Go + CLI + `@wailsio/runtime`) | **3.1.0** |
-| Go | 1.26+ (`nequ3d-app/go.mod`) |
-| Node.js | 22.12+ |
-| Core image | `nequ3d-core:v4` |
+| Component | Technology | Description |
+| --- | --- | --- |
+| **Frontend & 3D** | ![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178C6?logo=typescript&logoColor=white) ![Vite](https://img.shields.io/badge/Vite-v8.3-646CFF?logo=vite&logoColor=white) ![Three.js](https://img.shields.io/badge/Three.js-WebGL2-000000?logo=threedotjs&logoColor=white) ![gsplat](https://img.shields.io/badge/gsplat-3DGS-008CA8) | WebView2 UI, `<model-viewer>`, hybrid Mesh/3DGS, measurements, 2D Top View & 3D pins |
+| **Desktop Edge** | ![Wails](https://img.shields.io/badge/Wails-v3.1.0-DF0000) ![Go](https://img.shields.io/badge/Go-1.26+-00ADD8?logo=go&logoColor=white) | Native Windows shell, HTTP preview cache, GPU telemetry & tool-using agent |
+| **3D & Neural Core** | ![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white) ![OpenUSD](https://img.shields.io/badge/OpenUSD-SimReady-00B4D8) ![NVIDIA RTX NTC](https://img.shields.io/badge/NVIDIA_RTX_NTC-v0.10.1-76B900?logo=nvidia&logoColor=white) ![CUDA](https://img.shields.io/badge/CUDA-12.6-76B900?logo=nvidia&logoColor=white) | OpenUSD parsing, neural texture compression (`ntc-cli`), PSNR/SSIM & USD layers |
+| **RPC & Events** | ![gRPC](https://img.shields.io/badge/gRPC-Protobuf-244C5A) ![NATS](https://img.shields.io/badge/NATS-embedded-27AAE1?logo=natsdotio&logoColor=white) | Streaming Edge ↔ Core pipeline RPC and internal event bus |
+| **Object Storage** | ![MinIO](https://img.shields.io/badge/MinIO-S3_API-C72E49?logo=minio&logoColor=white) | `raw-scans` & `processed-models` buckets with SHA-256 integrity sidecars |
+| **Offline AI** | ![Ollama](https://img.shields.io/badge/Ollama-local-111827?logo=ollama&logoColor=white) ![LocateAnything](https://img.shields.io/badge/LocateAnything-optional-6366F1) | Local LLM advice/planner (`gemma:2b` / `llama3` / `llava`) — **no cloud API key** |
+| **Containers & K8s** | ![Docker](https://img.shields.io/badge/Docker-GPU-2496ED?logo=docker&logoColor=white) ![Podman](https://img.shields.io/badge/Podman-5+-892CA0?logo=podman&logoColor=white) ![Kubernetes](https://img.shields.io/badge/Kubernetes-local-326CE5?logo=kubernetes&logoColor=white) ![Helm](https://img.shields.io/badge/Helm-v3-0F1689?logo=helm&logoColor=white) | `nequ3d-core:v4` GPU container + local cluster packaging |
+| **GitOps & Secrets** | ![Argo CD](https://img.shields.io/badge/Argo_CD-GitOps-EF7B4D?logo=argo&logoColor=white) ![Sealed Secrets](https://img.shields.io/badge/Sealed_Secrets-CNCF-1F2937) | Declarative cluster sync and encrypted Kubernetes secrets |
+| **Observability** | ![Prometheus](https://img.shields.io/badge/Prometheus-metrics-E6522C?logo=prometheus&logoColor=white) ![Grafana](https://img.shields.io/badge/Grafana-dashboards-F46800?logo=grafana&logoColor=white) | Core gRPC, NTC VRAM/PSNR/SSIM gauges (`:8001`) & dashboards |
+| **Automation & CI** | ![Task](https://img.shields.io/badge/Task-runner-29BEB0?logo=task&logoColor=white) ![GitHub Actions](https://img.shields.io/badge/GitHub_Actions-CI-2088FF?logo=githubactions&logoColor=white) | One-command launch (`task run-all`) + Frontend / Go / Python / Helm CI |
 
 ```powershell
 go install github.com/wailsapp/wails/v3/cmd/wails3@v3.1.0
