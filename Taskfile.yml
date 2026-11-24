@@ -10,16 +10,14 @@ tasks:
         platforms: [linux, darwin]
 
   build-core:
-    desc: Builds the Docker image for the processing core
-    dir: nequ3d-core
+    desc: Builds the Core image (docker or podman; override with NEQU3D_CONTAINER_CLI)
     cmds:
-      - docker build -t nequ3d-core:v4 .
+      - pwsh -NoProfile -File ./scripts/container.ps1 build -t nequ3d-core:v4 ./nequ3d-core
 
   run-core:
     desc: Starts the Python gRPC server locally (Requires a separate terminal!)
-    dir: nequ3d-core
     cmds:
-      - cmd: docker run --rm --gpus all -e MINIO_ACCESS_KEY -e MINIO_SECRET_KEY -e MINIO_ENDPOINT="http://host.docker.internal:9000" --mount "type=bind,source={{.ROOT_DIR}}/data/objects,target=/tmp/workspace" -p 127.0.0.1:50051:50051 -p 127.0.0.1:8001:8001 nequ3d-core:v4
+      - cmd: pwsh -NoProfile -File ./scripts/container.ps1 run-core
         platforms: [windows, linux, darwin]
 
   dev-app:
@@ -34,16 +32,21 @@ tasks:
     cmds:
       - task: run-all
 
-  # build-locate:
-  #   desc: Builds the Docker image for the LocateAnything microservice
-  #   dir: ml-services/locate-anything
-  #   cmds:
-  #     - docker build -t nequ3d-locate:latest .
+  build-locate:
+    desc: Builds the Docker image for the LocateAnything microservice
+    cmds:
+      - pwsh -NoProfile -File ./scripts/container.ps1 build -t nequ3d-locate:latest ./ml-services/locate-anything
 
-  # run-locate:
-  #   desc: Runs the LocateAnything microservice using Docker (Requires GPU)
-  #   cmds:
-  #     - docker run --rm --gpus all -v "{{.ROOT_DIR}}/data/hf_cache:/root/.cache/huggingface" -p 8000:8000 nequ3d-locate:latest
+  run-locate:
+    desc: Runs LocateAnything on :8000 (GPU; shares VRAM with Core — prefer one heavy job at a time)
+    cmds:
+      - pwsh -NoProfile -Command "New-Item -ItemType Directory -Force -Path '{{.ROOT_DIR}}/data/hf_cache' | Out-Null; & ./scripts/container.ps1 cli run --rm --gpus all --name nequ3d-locate-dev --mount ('type=bind,source=' + (Join-Path '{{.ROOT_DIR}}' 'data/hf_cache') + ',target=/root/.cache/huggingface') -p 127.0.0.1:8000:8000 nequ3d-locate:latest"
+
+  run-all-locate:
+    desc: Full Windows session including LocateAnything (extra GPU VRAM)
+    platforms: [windows]
+    cmds:
+      - pwsh -NoProfile -File ./scripts/run-all.ps1 -WithLocate
 
   gitops-install:
     desc: Installs ArgoCD to the active Kubernetes cluster
@@ -97,7 +100,13 @@ tasks:
       - kubectl port-forward svc/minio -n minio 9001:9001
 
   run-all:
-    desc: Starts the complete Windows development session; builds Core only when missing
+    desc: One-shot Windows session — MinIO, Core GPU, Wails, Argo/Grafana/Prometheus UIs (use -NoStack to skip CNCF UIs)
     platforms: [windows]
     cmds:
-      - pwsh -NoProfile -File ./scripts/run-all.ps1
+      - pwsh -NoProfile -File ./scripts/run-all.ps1 -WithStack
+
+  run-all-lite:
+    desc: Same as run-all but without Argo/Grafana/Prometheus port-forwards
+    platforms: [windows]
+    cmds:
+      - pwsh -NoProfile -File ./scripts/run-all.ps1 -NoStack

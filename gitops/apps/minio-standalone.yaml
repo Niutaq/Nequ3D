@@ -15,14 +15,11 @@ spec:
     spec:
       containers:
       - name: minio
-        image: minio/minio:latest
+        # Official minio/minio on Docker Hub / quay is no longer anonymously pullable (AIStor).
+        # Bitnami legacy still ships a working community MinIO build for local/dev clusters.
+        image: bitnamilegacy/minio:2025.4.22-debian-12-r0
         imagePullPolicy: IfNotPresent
-        command:
-        - minio
-        - server
-        - /data
-        - --console-address
-        - ":9001"
+        # Bitnami entrypoint owns process start; do not override with `minio server ...`.
         env:
         - name: MINIO_ROOT_USER
           valueFrom:
@@ -34,9 +31,33 @@ spec:
             secretKeyRef:
               name: minio-credentials
               key: rootPassword
+        - name: MINIO_DEFAULT_BUCKETS
+          value: raw-scans,processed-models
+        # NetSecOps: enable SSE-S3 / KMS when ready; Edge uploads attach sha256 user-metadata
+        # (see docs/security-threat-model.md).
         ports:
         - containerPort: 9000
+          name: api
         - containerPort: 9001
+          name: console
+        readinessProbe:
+          httpGet:
+            path: /minio/health/ready
+            port: 9000
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        livenessProbe:
+          httpGet:
+            path: /minio/health/live
+            port: 9000
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        volumeMounts:
+        - name: data
+          mountPath: /bitnami/minio/data
+      volumes:
+      - name: data
+        emptyDir: {}
 ---
 apiVersion: v1
 kind: Service

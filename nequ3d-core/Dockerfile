@@ -19,7 +19,7 @@ RUN pip3 install --break-system-packages usd-core trimesh[all] networkx scipy
 
 # 3. Clone and Patch NVIDIA RTXNTC Repository
 WORKDIR /opt
-RUN git clone --recursive https://github.com/NVIDIA-RTX/RTXNTC.git
+RUN git clone --recursive --branch v0.10.1-beta https://github.com/NVIDIA-RTX/RTXNTC.git
 
 WORKDIR /opt/RTXNTC
 # Apply engineering patches to bypass CUDA 12.1 compilation errors
@@ -31,8 +31,20 @@ RUN sed -i 's/grid.thread_index().x;/blockIdx.x * blockDim.x + threadIdx.x;/g' l
     sed -i 's/MAX_MACRO<T>/MAX_MACRO/g' libraries/RTXNTC-Library/src/tin/tin_activation.h
 
 # 4. Headless RTXNTC Compilation (ntc-cli tool only, target architectures: Ampere & Ada)
+# - ShaderMake may pin a DXC tag/date pair that 404s; force a matching GitHub release asset.
+# - Donut float16 math needs F16C (`-mf16c`) or GCC fails with "target specific option mismatch".
 WORKDIR /opt/RTXNTC/build
-RUN cmake -DCMAKE_CUDA_ARCHITECTURES="86;89" -DDONUT_WITH_GLFW=OFF -DGLFW_BUILD_WAYLAND=OFF -DBUILD_SHARED_LIBS=OFF .. && \
+RUN cmake -DCMAKE_CUDA_ARCHITECTURES="86;89" \
+    -DDONUT_WITH_GLFW=OFF \
+    -DGLFW_BUILD_WAYLAND=OFF \
+    -DBUILD_SHARED_LIBS=OFF \
+    -DNTC_WITH_RENDERER=OFF \
+    -DNTC_WITH_TESTS=OFF \
+    -DSHADERMAKE_DXC_VERSION=v1.9.2609 \
+    -DSHADERMAKE_DXC_LINUX_DATE=2026_09_28 \
+    -DCMAKE_CXX_FLAGS="-mf16c -msse4.1" \
+    -DCMAKE_C_FLAGS="-mf16c -msse4.1" \
+    .. && \
     make ntc-cli -j
 
 # Expose executable globally

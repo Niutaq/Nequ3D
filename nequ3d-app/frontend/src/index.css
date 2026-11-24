@@ -30,7 +30,7 @@
   left: 50%;
   width: 150%;
   height: 150%;
-  background: radial-gradient(circle, rgba(20, 184, 166, 0.2) 0%, transparent 60%);
+  background: radial-gradient(circle, rgba(0, 210, 230, 0.2) 0%, transparent 60%);
   transform: translate(-50%, -50%) scale(0);
   transition: transform 0.4s ease-out;
   border-radius: 50%;
@@ -43,12 +43,12 @@
 
 .technical-button:not(:disabled):hover {
   transform: translateY(-2px);
-  box-shadow: 0 4px 15px rgba(20, 184, 166, 0.3);
+  box-shadow: 0 4px 15px rgba(0, 210, 230, 0.3);
   border-color: var(--accent-teal);
   color: var(--accent-teal);
 }
 
 .technical-button:not(:disabled):active {
   transform: translateY(1px);
-  box-shadow: 0 2px 5px rgba(20, 184, 166, 0.2);
+  box-shadow: 0 2px 5px rgba(0, 210, 230, 0.2);
 }

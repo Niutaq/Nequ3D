@@ -14,7 +14,7 @@ import {
   type Object3D,
 } from "three";
 
-export type ToolMode = "orbit" | "measure" | "section";
+export type ToolMode = "orbit" | "measure" | "section" | "pin";
 export type SectionAxis = "x" | "y" | "z";
 
 export type MeasurePoint = {
@@ -31,6 +31,13 @@ export type Measurement = {
   a: MeasurePoint;
   b: MeasurePoint;
   distance: number;
+};
+
+export type PinNote = {
+  id: number;
+  text: string;
+  kind: string;
+  position: MeasurePoint;
 };
 
 type ModelViewerEl = HTMLElement & {
@@ -53,14 +60,124 @@ let toolMode: ToolMode = "orbit";
 let sectionAxis: SectionAxis = "y";
 let sectionT = 0.5;
 let sectionEnabled = false;
+let activeSectionPlane: Plane | null = null;
 let pendingPoint: MeasurePoint | null = null;
 let measurements: Measurement[] = [];
 let measureSeq = 1;
 let hotspotSeq = 0;
+let unitScale = 1;
+
+export function setUnitScale(scale: number): void {
+  unitScale = Number.isFinite(scale) && scale > 0 ? scale : 1;
+}
+
+export function getUnitScale(): number {
+  return unitScale;
+}
 let boundViewer: ModelViewerEl | null = null;
 let clickHandler: ((e: MouseEvent) => void) | null = null;
+let pointerDownHandler: ((e: PointerEvent) => void) | null = null;
+let downX = 0;
+let downY = 0;
+let hasPointerDown = false;
 let onMeasurementsChange: ((items: Measurement[]) => void) | null = null;
 let onPendingChange: ((pending: boolean) => void) | null = null;
+let onMeasureComplete: (() => void) | null = null;
+let pinNotes: PinNote[] = [];
+let pinSeq = 1;
+let onPinsChange: ((items: PinNote[]) => void) | null = null;
+let onPinSurfaceClick: ((point: MeasurePoint) => void) | null = null;
+
+export function getPinNotes(): PinNote[] {
+  return pinNotes.slice();
+}
+
+export function setPinsListener(fn: ((items: PinNote[]) => void) | null): void {
+  onPinsChange = fn;
+}
+
+export function setPinSurfaceClickListener(
+  fn: ((point: MeasurePoint) => void) | null,
+): void {
+  onPinSurfaceClick = fn;
+}
+
+export function addPinNote(point: MeasurePoint, text: string, kind = "note"): PinNote {
+  const note: PinNote = {
+    id: pinSeq++,
+    text: text.trim() || "Note",
+    kind,
+    position: point,
+  };
+  pinNotes = [...pinNotes, note];
+  if (boundViewer) renderPinHotspot(boundViewer, note);
+  onPinsChange?.(pinNotes);
+  return note;
+}
+
+export function removePinNote(id: number): void {
+  pinNotes = pinNotes.filter((p) => p.id !== id);
+  if (boundViewer) {
+    boundViewer
+      .querySelectorAll(`.pin-hotspot[data-pin-id="${id}"]`)
+      .forEach((n) => n.remove());
+  }
+  onPinsChange?.(pinNotes);
+}
+
+export function clearPinNotes(): void {
+  pinNotes = [];
+  if (boundViewer) {
+    boundViewer.querySelectorAll(".pin-hotspot").forEach((n) => n.remove());
+  }
+  onPinsChange?.(pinNotes);
+}
+
+export function loadPinNotes(notes: PinNote[]): void {
+  if (boundViewer) {
+    boundViewer.querySelectorAll(".pin-hotspot").forEach((n) => n.remove());
+  }
+  pinNotes = [];
+  let maxId = 0;
+  for (const raw of notes) {
+    if (!raw || !raw.position) continue;
+    const id = Number(raw.id) || maxId + 1;
+    if (id > maxId) maxId = id;
+    const note: PinNote = {
+      id,
+      text: String(raw.text || "Note"),
+      kind: String(raw.kind || "note"),
+      position: raw.position,
+    };
+    pinNotes.push(note);
+    if (boundViewer) renderPinHotspot(boundViewer, note);
+  }
+  pinSeq = Math.max(pinSeq, maxId + 1);
+  onPinsChange?.(pinNotes);
+}
+
+export function reattachPinHotspots(): void {
+  if (!boundViewer) return;
+  boundViewer.querySelectorAll(".pin-hotspot").forEach((n) => n.remove());
+  for (const note of pinNotes) {
+    renderPinHotspot(boundViewer, note);
+  }
+}
+
+function renderPinHotspot(viewer: ModelViewerEl, note: PinNote): void {
+  const el = document.createElement("button");
+  el.type = "button";
+  el.className = "pin-hotspot";
+  el.dataset.pinId = String(note.id);
+  el.slot = `hotspot-p${note.id}`;
+  el.dataset.position = `${note.position.x}m ${note.position.y}m ${note.position.z}m`;
+  el.dataset.normal = `${note.position.nx}m ${note.position.ny}m ${note.position.nz}m`;
+  el.title = note.text;
+  el.innerHTML = `<span class="pin-badge">P${note.id}</span><span class="pin-label"></span>`;
+  const lbl = el.querySelector<HTMLSpanElement>(".pin-label");
+  if (lbl) lbl.textContent = note.text;
+  viewer.appendChild(el);
+}
 
 export function getToolMode(): ToolMode {
   return toolMode;
@@ -80,16 +197,51 @@ export function setPendingListener(fn: ((pending: boolean) => void) | null): voi
   onPendingChange = fn;
 }
 
+export function setMeasureCompleteListener(fn: (() => void) | null): void {
+  onMeasureComplete = fn;
+}
+
 export function bindViewerTools(viewer: ModelViewerEl | null): void {
   if (boundViewer && clickHandler) {
     boundViewer.removeEventListener("click", clickHandler as EventListener);
   }
+  if (boundViewer && pointerDownHandler) {
+    boundViewer.removeEventListener(
+      "pointerdown",
+      pointerDownHandler as EventListener,
+    );
+  }
   boundViewer = viewer;
+  pointerDownHandler = (e: PointerEvent) => {
+    if (e.button !== 0) {
+      hasPointerDown = false;
+      return;
+    }
+    hasPointerDown = true;
+    downX = e.clientX;
+    downY = e.clientY;
+  };
   clickHandler = (e: MouseEvent) => {
-    if (toolMode !== "measure" || !boundViewer) return;
+    if ((toolMode !== "measure" && toolMode !== "pin") || !boundViewer) return;
+    if (
+      hasPointerDown &&
+      Math.hypot(e.clientX - downX, e.clientY - downY) > 5
+    ) {
+      hasPointerDown = false;
+      return;
+    }
+    hasPointerDown = false;
+    if (toolMode === "pin") {
+      handlePinClick(boundViewer, e);
+      return;
+    }
     handleMeasureClick(boundViewer, e);
   };
-  if (boundViewer && clickHandler) {
+  if (boundViewer && pointerDownHandler && clickHandler) {
+    boundViewer.addEventListener(
+      "pointerdown",
+      pointerDownHandler as EventListener,
+    );
     boundViewer.addEventListener("click", clickHandler as EventListener);
   }
   applyCameraControls();
@@ -145,6 +297,23 @@ export function clearMeasurements(): void {
   onMeasurementsChange?.(measurements);
 }
 
+export function removeMeasurement(id: number): void {
+  measurements = measurements.filter((m) => m.id !== id);
+  if (measurements.length === 0) {
+    removeHotspots();
+  }
+  onMeasurementsChange?.(measurements);
+}
+
+export function focusMeasurement(id: number): void {
+  if (!boundViewer) return;
+  const item = measurements.find((m) => m.id === id);
+  if (!item) return;
+  removeHotspots();
+  addHotspot(boundViewer, item.a, "A");
+  addHotspot(boundViewer, item.b, "B");
+}
+
 export function formatDistance(meters: number): string {
   if (!Number.isFinite(meters)) return "—";
   if (Math.abs(meters) >= 1) return `${meters.toFixed(3)} m`;
@@ -160,7 +329,14 @@ export function readModelExtents(viewer: ModelViewerEl | null): {
     const size = viewer.getDimensions();
     const center = viewer.getBoundingBoxCenter();
     if (!size || !center) return null;
-    return { size, center };
+    return {
+      size: {
+        x: size.x * unitScale,
+        y: size.y * unitScale,
+        z: size.z * unitScale,
+      },
+      center,
+    };
   } catch {
     return null;
   }
@@ -168,13 +344,46 @@ export function readModelExtents(viewer: ModelViewerEl | null): {
 
 function applyCameraControls(): void {
   if (!boundViewer) return;
-  boundViewer.cameraControls = toolMode !== "measure";
+  boundViewer.cameraControls = true;
+}
+
+function handlePinClick(viewer: ModelViewerEl, e: MouseEvent): void {
+  if (!viewer.positionAndNormalFromPoint) return;
+  const hit = viewer.positionAndNormalFromPoint(e.clientX, e.clientY);
+  if (!hit) return;
+  if (
+    sectionEnabled &&
+    activeSectionPlane &&
+    activeSectionPlane.distanceToPoint(
+      new Vector3(hit.position.x, hit.position.y, hit.position.z),
+    ) < -1e-4
+  ) {
+    return;
+  }
+  onPinSurfaceClick?.({
+    x: hit.position.x,
+    y: hit.position.y,
+    z: hit.position.z,
+    nx: hit.normal.x,
+    ny: hit.normal.y,
+    nz: hit.normal.z,
+  });
 }
 
 function handleMeasureClick(viewer: ModelViewerEl, e: MouseEvent): void {
   if (!viewer.positionAndNormalFromPoint) return;
   const hit = viewer.positionAndNormalFromPoint(e.clientX, e.clientY);
   if (!hit) return;
+
+  if (
+    sectionEnabled &&
+    activeSectionPlane &&
+    activeSectionPlane.distanceToPoint(
+      new Vector3(hit.position.x, hit.position.y, hit.position.z),
+    ) < -1e-4
+  ) {
+    return;
+  }
 
   const point: MeasurePoint = {
     x: hit.position.x,
@@ -185,20 +394,21 @@ function handleMeasureClick(viewer: ModelViewerEl, e: MouseEvent): void {
     nz: hit.normal.z,
   };
 
-  addHotspot(viewer, point, pendingPoint ? "B" : "A");
-
   if (!pendingPoint) {
+    removeHotspots();
+    addHotspot(viewer, point, "A");
     pendingPoint = point;
     onPendingChange?.(true);
     return;
   }
 
+  addHotspot(viewer, point, "B");
   const a = pendingPoint;
   const b = point;
   const dx = b.x - a.x;
   const dy = b.y - a.y;
   const dz = b.z - a.z;
-  const distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
+  const distance = Math.sqrt(dx * dx + dy * dy + dz * dz) * unitScale;
   measurements = [
     ...measurements,
     { id: measureSeq++, a, b, distance },
@@ -206,6 +416,7 @@ function handleMeasureClick(viewer: ModelViewerEl, e: MouseEvent): void {
   pendingPoint = null;
   onPendingChange?.(false);
   onMeasurementsChange?.(measurements);
+  onMeasureComplete?.();
 }
 
 function addHotspot(viewer: ModelViewerEl, p: MeasurePoint, label: string): void {
@@ -281,6 +492,7 @@ export function applySectionPlane(): void {
     sectionAxis === "z" ? pos : center.z,
   );
   const plane = new Plane().setFromNormalAndCoplanarPoint(normal, point);
+  activeSectionPlane = plane;
 
   threeRenderer.localClippingEnabled = true;
 
@@ -304,6 +516,7 @@ export function applySectionPlane(): void {
 }
 
 function clearSectionPlane(): void {
+  activeSectionPlane = null;
   const viewer = boundViewer;
   if (!viewer) return;
   const scene = getMvScene(viewer);
@@ -343,7 +556,7 @@ function updateSectionHelper(
   if (!helper) {
     const geo = new PlaneGeometry(1, 1);
     const mat = new MeshBasicMaterial({
-      color: 0x14b8a6,
+      color: 0x00d2e6,
       transparent: true,
       opacity: 0.18,
       side: DoubleSide,
@@ -352,6 +565,7 @@ function updateSectionHelper(
     helper = new Mesh(geo, mat);
     helper.name = SECTION_HELPER_NAME;
     helper.renderOrder = 999;
+    helper.raycast = () => {};
     scene.add(helper);
   }
 
