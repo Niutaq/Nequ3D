@@ -9,7 +9,7 @@ Nequ3D turns **Reality Scan** captures into an **OpenUSD Building Renovation Dig
 **Research question:** how can a local tool-using agent, on Reality Scan + OpenUSD twin layers, propose a zone-ordered renovation priority that an engineer can inspect and export to Kit?  
 **Start here:** jump to [Start everything](#start-everything) and [Reality Scan workflow](#reality-scan-workflow).
 
-**One command:** `task run-all` starts MinIO forward, Core (GPU), Wails, and CNCF UIs (Argo `:8080`, Grafana `:3000`, Prometheus `:9090`, MinIO console `:9001`). Lite: `task run-all-lite`. Locate: `task run-all-locate`.
+**One command:** `task run-all` starts MinIO forward, Core (GPU), Wails, and CNCF UIs (Argo `:8080`, Grafana `:3000`, Prometheus `:9090`, Jaeger `:16686`, MinIO console `:9001`). Lite: `task run-all-lite`. Locate: `task run-all-locate`.
 
 **Supported local workflow: Windows + NVIDIA GPU.** The Wails desktop app runs on Windows; the Python Core runs in a Linux Docker container. MinIO runs in the local Kubernetes cluster and is exposed by the launcher.
 
@@ -41,7 +41,7 @@ Nequ3D turns **Reality Scan** captures into an **OpenUSD Building Renovation Dig
 | **Offline AI** | ![Ollama](https://img.shields.io/badge/Ollama-local-111827?logo=ollama&logoColor=white) ![LocateAnything](https://img.shields.io/badge/LocateAnything-optional-6366F1) | Local LLM advice/planner (`gemma:2b` / `llama3` / `llava`) — **no cloud API key** |
 | **Containers & K8s** | ![Docker](https://img.shields.io/badge/Docker-GPU-2496ED?logo=docker&logoColor=white) ![Podman](https://img.shields.io/badge/Podman-5+-892CA0?logo=podman&logoColor=white) ![Kubernetes](https://img.shields.io/badge/Kubernetes-local-326CE5?logo=kubernetes&logoColor=white) ![Helm](https://img.shields.io/badge/Helm-v3-0F1689?logo=helm&logoColor=white) | `nequ3d-core:v4` GPU container + local cluster packaging |
 | **GitOps & Secrets** | ![Argo CD](https://img.shields.io/badge/Argo_CD-GitOps-EF7B4D?logo=argo&logoColor=white) ![Sealed Secrets](https://img.shields.io/badge/Sealed_Secrets-CNCF-1F2937) | Declarative cluster sync and encrypted Kubernetes secrets |
-| **Observability** | ![Prometheus](https://img.shields.io/badge/Prometheus-metrics-E6522C?logo=prometheus&logoColor=white) ![Grafana](https://img.shields.io/badge/Grafana-dashboards-F46800?logo=grafana&logoColor=white) | Core gRPC, NTC VRAM/PSNR/SSIM gauges (`:8001`) & dashboards |
+| **Observability** | ![OpenTelemetry](https://img.shields.io/badge/OpenTelemetry-OTLP-425CC7?logo=opentelemetry&logoColor=white) ![Jaeger](https://img.shields.io/badge/Jaeger-tracing-60D0E4?logo=jaeger&logoColor=black) ![Prometheus](https://img.shields.io/badge/Prometheus-metrics-E6522C?logo=prometheus&logoColor=white) ![Grafana](https://img.shields.io/badge/Grafana-dashboards-F46800?logo=grafana&logoColor=white) | End-to-end W3C trace propagation (Edge → gRPC → Core), Core metrics (`:8001`) & dashboards |
 | **Automation & CI** | ![Task](https://img.shields.io/badge/Task-runner-29BEB0?logo=task&logoColor=white) ![GitHub Actions](https://img.shields.io/badge/GitHub_Actions-CI-2088FF?logo=githubactions&logoColor=white) | One-command launch (`task run-all`) + Frontend / Go / Python / Helm CI |
 
 ```powershell
@@ -184,12 +184,14 @@ Ollama on `localhost:11434`. Default model: `gemma:2b`. If Ollama is down, **Run
 | Command | Purpose |
 | --- | --- |
 | `task run-all` / `task dev` | Full Windows session |
+| `task run-all-build` | Rebuild `nequ3d-core:v4` + full Windows session |
 | `task run-all-locate` | Same + LocateAnything on :8000 |
 | `task build-core` | Rebuild `nequ3d-core:v4` |
 | `task build-locate` / `task run-locate` | LocateAnything image / container |
 | `task dev-app` | Desktop only (Core/MinIO already up) |
 | `task run-core` | Core only |
 | `task proto` | Regenerate gRPC stubs |
+| `task jaeger-ui` | Port-forward Jaeger UI (`:16686`) & OTLP HTTP (`:4318`) |
 | `wails3 build` in `nequ3d-app` | Desktop binary under `nequ3d-app/bin` |
 
 ## Ports
@@ -199,6 +201,7 @@ Ollama on `localhost:11434`. Default model: `gemma:2b`. If Ollama is down, **Run
 | MinIO API | 9000 |
 | Core gRPC | 50051 |
 | Core metrics | 8001 |
+| Jaeger UI / OTLP HTTP | 16686 / 4318 |
 | LocateAnything | 8000 |
 | Vite | 9245 |
 | Ollama | 11434 |

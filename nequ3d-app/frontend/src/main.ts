@@ -10,6 +10,7 @@ import {
   RunRenovationAgent,
 } from "../bindings/changeme/app";
 import "@google/model-viewer";
+import { $renderer } from "@google/model-viewer/lib/model-viewer-base.js";
 import { Events } from "@wailsio/runtime";
 import { IntLayer, type Language } from "./i18n";
 import { Chart, registerables } from "chart.js";
@@ -323,12 +324,12 @@ style.textContent = `
     margin-left: 16px;
     margin-right: auto;
   }
-  .telemetry-item { display: flex; flex-direction: column; gap: 4px; }
+  .telemetry-item { display: flex; flex-direction: column; gap: 4px; min-width: 92px; }
   .telemetry-label { font-family: var(--font-mono); font-size: 0.74rem; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.06em; }
-  .telemetry-value { font-family: var(--font-mono); font-size: 1.05rem; font-weight: 700; color: var(--accent-teal); }
+  .telemetry-value { font-family: var(--font-mono); font-size: 1.05rem; font-weight: 700; color: var(--accent-teal); font-variant-numeric: tabular-nums; white-space: nowrap; }
 
   .sys-bar-bg { width: 88px; height: 4px; background: var(--border-color); margin-top: 2px; border-radius: 99px; overflow: hidden; }
-  .sys-bar-fill { height: 100%; background: var(--accent-solid); transition: width 0.3s; }
+  .sys-bar-fill { width: 100%; height: 100%; background: var(--accent-solid); transform-origin: left center; transform: scaleX(0); transition: transform 0.3s ease; will-change: transform; }
 
   .technical-button {
     background: var(--bg-surface);
@@ -436,6 +437,7 @@ style.textContent = `
     border: 1px solid var(--border-color); border-radius: 999px;
     padding: 8px 14px; font-family: var(--font-mono); font-size: 0.8rem;
     color: var(--accent-teal); font-weight: 700;
+    min-width: 78px; text-align: center; font-variant-numeric: tabular-nums;
   }
 
   .section-rail {
@@ -623,6 +625,48 @@ style.textContent = `
   .simready-row.warn .sr-icon { color: var(--accent-warm); }
   .simready-row.info .sr-icon { color: var(--text-muted); }
   .simready-row.error .sr-icon { color: #ef4444; }
+
+  .otel-actions {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    margin-bottom: 8px;
+  }
+  .otel-trace-id {
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    color: var(--accent-teal);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .otel-stage-row {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    margin-bottom: 6px;
+  }
+  .otel-stage-head {
+    display: flex;
+    justify-content: space-between;
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+    color: var(--text-muted);
+  }
+  .otel-stage-head strong { color: var(--text-main); }
+  .otel-bar-track {
+    width: 100%;
+    height: 5px;
+    border-radius: 999px;
+    background: var(--border-color);
+    overflow: hidden;
+  }
+  .otel-bar-fill {
+    height: 100%;
+    border-radius: 999px;
+    background: linear-gradient(90deg, var(--accent-solid), var(--accent-teal));
+  }
 
   .measure-list { display: flex; flex-direction: column; gap: 6px; }
   #measure-list {
@@ -1014,6 +1058,13 @@ let timerInterval: number | null = null;
 let fpsFrames = 0;
 let lastFpsTime = performance.now();
 let qualityAvailable = false;
+let pendingQualitySpec: {
+  originalUrl: string;
+  reconstructedUrl: string;
+  glbUrl: string;
+} | null = null;
+let hydratedQualityKey = "";
+let tabSwitchSeq = 0;
 let lastDetections: unknown = null;
 
 // Global state to allow re-translating telemetry and LLM without re-running analysis
@@ -1084,8 +1135,8 @@ function initUI(): void {
           <details class="ingest-details">
             <summary data-i18n="ingestCollapse"></summary>
             <div class="ingest-body">
-              <input type="text" id="sketchfab-url" data-i18n-placeholder="sketchfabUrl" placeholder="Model URL or UID" class="technical-select">
-              <input type="password" id="sketchfab-token" data-i18n-placeholder="sketchfabToken" placeholder="API Token" class="technical-select">
+              <input type="text" id="sketchfab-url" name="sketchfab-url" autocomplete="off" data-i18n-placeholder="sketchfabUrl" placeholder="Model URL or UID" class="technical-select">
+              <input type="password" id="sketchfab-token" name="sketchfab-token" autocomplete="off" data-i18n-placeholder="sketchfabToken" placeholder="API Token" class="technical-select">
               <button id="sketchfab-btn" class="technical-button primary">
                 <span data-i18n="loadSketchfabBtn">Pobierz i Analizuj</span>
               </button>
@@ -1100,18 +1151,18 @@ function initUI(): void {
             <span class="telemetry-label" data-i18n="targetBitrate"></span>
             <span id="bpp-val" class="telemetry-value" style="font-size: 0.9rem;"></span>
           </div>
-          <input type="range" id="bpp-slider" min="1" max="8" step="1" value="5">
+          <input type="range" id="bpp-slider" name="bpp-slider" min="1" max="8" step="1" value="5">
 
           <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 4px;">
             <span class="telemetry-label" data-i18n="trainingSteps"></span>
             <span id="steps-val" class="telemetry-value" style="font-size: 0.9rem;"></span>
           </div>
-          <input type="range" id="steps-slider" min="50" max="1000" step="50" value="150">
+          <input type="range" id="steps-slider" name="steps-slider" min="50" max="1000" step="50" value="150">
         </div>
 
         <div class="panel-section">
           <span class="section-label" data-i18n="modelLabel"></span>
-          <select id="llm-model" class="technical-select">
+          <select id="llm-model" name="llm-model" class="technical-select">
             <option value="gemma2" data-i18n="modelFast"></option>
             <option value="llama3" data-i18n="modelLlama"></option>
             <option value="llava">LLaVA (Vision AI)</option>
@@ -1184,7 +1235,7 @@ function initUI(): void {
         </div>
 
         <div id="pin-popover" class="pin-popover" hidden>
-          <input type="text" id="pin-input" data-i18n-placeholder="pinPlaceholder" placeholder="Note…" />
+          <input type="text" id="pin-input" name="pin-input" autocomplete="off" data-i18n-placeholder="pinPlaceholder" placeholder="Note…" />
           <button type="button" id="btn-pin-confirm" class="nav-reset-btn" data-i18n="pinAdd"></button>
           <button type="button" id="btn-pin-cancel" class="nav-reset-btn" data-i18n="pinCancel"></button>
         </div>
@@ -1213,7 +1264,7 @@ function initUI(): void {
         </div>
 
         <div id="section-rail" class="section-rail" aria-hidden="true">
-          <input type="range" id="section-slider" min="0" max="100" value="50" orient="vertical" />
+          <input type="range" id="section-slider" name="section-slider" min="0" max="100" value="50" orient="vertical" />
         </div>
 
         <button type="button" id="toggle-left-panel" class="panel-collapse-btn left" aria-label="Collapse panel">
@@ -1240,7 +1291,7 @@ function initUI(): void {
             <span class="telemetry-label" data-i18n="sectionDepth"></span>
             <span id="section-val" class="telemetry-value" style="font-size: 0.9rem;">50%</span>
           </div>
-          <input type="range" id="section-slider-panel" min="0" max="100" value="50">
+          <input type="range" id="section-slider-panel" name="section-slider-panel" min="0" max="100" value="50">
           <div id="measure-list" class="measure-list"></div>
           <div id="pin-list" class="measure-list"></div>
         </div>
@@ -1258,7 +1309,7 @@ function initUI(): void {
 
         <div class="panel-section">
           <span class="section-label" data-i18n="locateTitle"></span>
-          <input type="text" id="locate-prompt" class="technical-select" data-i18n-placeholder="locatePrompt" placeholder="crack, moisture, window">
+          <input type="text" id="locate-prompt" name="locate-prompt" autocomplete="off" class="technical-select" data-i18n-placeholder="locatePrompt" placeholder="crack, moisture, window">
           <button id="btn-locate" class="technical-button" style="width:100%; margin-top:4px;" type="button">
             <span data-i18n="locateBtn"></span>
           </button>
@@ -1291,8 +1342,52 @@ function initUI(): void {
   initCollapsiblePanels();
   initResizablePanels();
   initComparisonResize();
+  guardModelViewerArBug();
+  startLocalClock();
   startFpsCounter();
   playStartupIntro();
+}
+
+function guardModelViewerArBug(): void {
+  // Work around upstream @google/model-viewer v4 ARRenderer.onUpdateScene bug:
+  // mutating viewer.orientation outside WebXR creates XRMenuPanel (leaking 3 svg+xml blobs)
+  // and crashes on null presentedScene.add(...).
+  for (const id of [
+    "viewer-usd",
+    "viewer-orig",
+    "viewer-ntc",
+    "viewer-hybrid-mesh",
+  ]) {
+    try {
+      const v = document.getElementById(id) as any;
+      const ar = v?.[$renderer]?.arRenderer;
+      if (ar && !ar.__nequ3dGuarded && typeof ar.onUpdateScene === "function") {
+        const orig = ar.onUpdateScene;
+        ar.onUpdateScene = () => {
+          if (!ar.isPresenting || !ar.presentedScene) return;
+          orig();
+        };
+        ar.__nequ3dGuarded = true;
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+function startLocalClock(): void {
+  const timeEl = getEl<HTMLSpanElement>("sys-time");
+  const updateClock = () => {
+    if (document.hidden) return;
+    const now = new Date();
+    const hh = String(now.getHours()).padStart(2, "0");
+    const mm = String(now.getMinutes()).padStart(2, "0");
+    const ss = String(now.getSeconds()).padStart(2, "0");
+    const str = `${hh}:${mm}:${ss}`;
+    if (timeEl.textContent !== str) timeEl.textContent = str;
+  };
+  updateClock();
+  window.setInterval(updateClock, 1000);
 }
 
 function playStartupIntro(): void {
@@ -1352,14 +1447,23 @@ function triggerViewerBlurEnter(el: HTMLElement): void {
 
 function startFpsCounter() {
   const fpsEl = getEl("fps-counter");
+  let lastLabel = "";
   function loop() {
-    fpsFrames++;
-    const now = performance.now();
-    if (now - lastFpsTime >= 1000) {
-      if (fpsEl)
-        fpsEl.textContent = `${Math.round((fpsFrames * 1000) / (now - lastFpsTime))} FPS`;
+    if (!document.hidden) {
+      fpsFrames++;
+      const now = performance.now();
+      if (now - lastFpsTime >= 1000) {
+        const nextLabel = `${Math.round((fpsFrames * 1000) / (now - lastFpsTime))} FPS`;
+        if (fpsEl && nextLabel !== lastLabel) {
+          fpsEl.textContent = nextLabel;
+          lastLabel = nextLabel;
+        }
+        fpsFrames = 0;
+        lastFpsTime = now;
+      }
+    } else {
       fpsFrames = 0;
-      lastFpsTime = now;
+      lastFpsTime = performance.now();
     }
     requestAnimationFrame(loop);
   }
@@ -1503,7 +1607,7 @@ function initViewerToolsUI(): void {
   const viewer = getEl("viewer-usd") as any;
   bindViewerTools(viewer);
   viewer.addEventListener("load", () => {
-    bindViewerTools(viewer);
+    reattachPinHotspots();
     updateDimsBadge(viewer);
     if (isSectionEnabled()) applySectionPlane();
   });
@@ -1943,11 +2047,12 @@ function updateDimsBadge(viewer: any): void {
 }
 
 function updateViewerOrientations(): void {
+  guardModelViewerArBug();
   const orientation = `${rotX}deg ${rotY}deg ${rotZ}deg`;
   const viewers = ["viewer-usd", "viewer-orig", "viewer-ntc", "viewer-hybrid-mesh"];
   viewers.forEach((id) => {
     const v = getEl<any>(id);
-    if (v) v.orientation = orientation;
+    if (v && v.orientation !== orientation) v.orientation = orientation;
   });
   autoSplatCache = null;
 }
@@ -2091,6 +2196,7 @@ function attachEventListeners(): void {
       const stats = normalizeStatsEvent(event);
       if (stats) updateSystemStats(stats);
     });
+    void Events.Emit("requestLocalServerUrl");
   } catch {
     console.warn("[Nequ3D] Wails event bridge unavailable.");
   }
@@ -2348,9 +2454,6 @@ async function hydrateViewers(telemetry: PipelineTelemetry): Promise<void> {
       "load",
       async () => {
         if (viewerUSD.src !== meshUrl) return; // Prevent race conditions
-        bindViewerTools(viewerUSD);
-        reattachPinHotspots();
-        updateDimsBadge(viewerUSD);
         const material = viewerUSD.model?.materials[0];
         if (material) {
           material.pbrMetallicRoughness.setBaseColorFactor([1, 1, 1, 1]);
@@ -2362,9 +2465,7 @@ async function hydrateViewers(telemetry: PipelineTelemetry): Promise<void> {
             try {
               const hostPath = toHostPath(originalPath);
               const texUrl = localFileUrl(hostPath);
-              const texture = await viewerUSD.createTexture(
-                `${texUrl}&cb=${Date.now()}`,
-              );
+              const texture = await viewerUSD.createTexture(texUrl);
               if (viewerUSD.src === meshUrl) {
                 material.pbrMetallicRoughness.baseColorTexture.setTexture(
                   texture,
@@ -2396,6 +2497,8 @@ async function hydrateQualityViewer(
   const qualityAsset = findQualityAsset(telemetry);
 
   if (!qualityAsset?.original_path || !qualityAsset?.reconstructed_path) {
+    pendingQualitySpec = null;
+    hydratedQualityKey = "";
     setQualityAvailability(false);
     return;
   }
@@ -2405,15 +2508,21 @@ async function hydrateQualityViewer(
   const glbPath = resolveMeshPath(telemetry);
 
   if (!originalPath || !reconstructedPath || !glbPath) {
+    pendingQualitySpec = null;
+    hydratedQualityKey = "";
     setQualityAvailability(false);
     return;
   }
 
-  await setQualityTextures(
-    localFileUrl(originalPath),
-    localFileUrl(reconstructedPath),
-    localFileUrl(glbPath),
-  );
+  // Defer mounting the 2 extra <model-viewer> instances until the user opens the Quality tab.
+  pendingQualitySpec = {
+    originalUrl: localFileUrl(originalPath),
+    reconstructedUrl: localFileUrl(reconstructedPath),
+    glbUrl: localFileUrl(glbPath),
+  };
+  hydratedQualityKey = "";
+  comparisonState.split = 50;
+  setQualityAvailability(true);
 }
 
 function syncQualityCamera(jump = false): void {
@@ -2468,9 +2577,7 @@ async function setQualityTextures(
       const material = viewer.model?.materials[0];
       if (material) {
         material.pbrMetallicRoughness.setBaseColorFactor([1, 1, 1, 1]);
-        const texture = await viewer.createTexture(
-          `${textureUrl}&cb=${Date.now()}`,
-        );
+        const texture = await viewer.createTexture(textureUrl);
         if (viewer.src === glbUrl) {
           material.pbrMetallicRoughness.baseColorTexture.setTexture(texture);
         }
@@ -2534,7 +2641,11 @@ async function resolveSplatSource(
   const meshSrc = viewerUSD.src || "";
   if (!meshSrc) return null;
 
-  if (autoSplatCache && autoSplatCache.meshSrc === meshSrc) {
+  if (
+    autoSplatCache &&
+    autoSplatCache.meshSrc === meshSrc &&
+    autoSplatCache.splat.buffer.byteLength > 0
+  ) {
     return {
       kind: "buffer",
       buffer: autoSplatCache.splat.buffer,
@@ -2573,9 +2684,7 @@ async function hydrateHybridMeshMaterial(
     if (originalPath) {
       try {
         const texUrl = localFileUrl(toHostPath(originalPath));
-        const texture = await meshViewer.createTexture(
-          `${texUrl}&cb=${Date.now()}`,
-        );
+        const texture = await meshViewer.createTexture(texUrl);
         if (meshViewer.src === meshSrc) {
           material.pbrMetallicRoughness.baseColorTexture.setTexture(texture);
         }
@@ -2585,14 +2694,51 @@ async function hydrateHybridMeshMaterial(
     }
   };
   if (meshViewer.src !== meshSrc) {
-    meshViewer.addEventListener("load", () => void apply(), { once: true });
-    meshViewer.src = meshSrc;
+    await new Promise<void>((resolve) => {
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        resolve();
+      };
+      const timer = window.setTimeout(finish, 4000);
+      meshViewer.addEventListener(
+        "load",
+        () => {
+          window.clearTimeout(timer);
+          void apply().finally(finish);
+        },
+        { once: true },
+      );
+      meshViewer.src = meshSrc;
+    });
+  } else if (!meshViewer.loaded) {
+    await new Promise<void>((resolve) => {
+      const timer = window.setTimeout(resolve, 4000);
+      meshViewer.addEventListener(
+        "load",
+        () => {
+          window.clearTimeout(timer);
+          void apply().finally(resolve);
+        },
+        { once: true },
+      );
+    });
   } else if (meshViewer.model) {
     await apply();
   }
 }
 
+function nextPaint(): Promise<void> {
+  return new Promise((resolve) => {
+    requestAnimationFrame(() => {
+      window.setTimeout(resolve, 0);
+    });
+  });
+}
+
 async function switchTab(mode: ViewerMode): Promise<void> {
+  const seq = ++tabSwitchSeq;
   activeMode = mode;
 
   const viewerUSD = getEl<HTMLElement>("viewer-usd") as HTMLElement & {
@@ -2618,6 +2764,7 @@ async function switchTab(mode: ViewerMode): Promise<void> {
 
   if (mode !== "splat" && mode !== "hybrid") {
     await unmountSplatViewer();
+    if (seq !== tabSwitchSeq) return;
   }
 
   if (mode === "mesh") {
@@ -2637,6 +2784,19 @@ async function switchTab(mode: ViewerMode): Promise<void> {
       qualityLayer.style.display = "block";
       triggerViewerBlurEnter(qualityLayer);
       syncComparisonLayout();
+      if (pendingQualitySpec) {
+        const key = `${pendingQualitySpec.glbUrl}|${pendingQualitySpec.originalUrl}|${pendingQualitySpec.reconstructedUrl}`;
+        if (hydratedQualityKey !== key) {
+          hydratedQualityKey = key;
+          await nextPaint();
+          if (seq !== tabSwitchSeq) return;
+          await setQualityTextures(
+            pendingQualitySpec.originalUrl,
+            pendingQualitySpec.reconstructedUrl,
+            pendingQualitySpec.glbUrl,
+          );
+        }
+      }
       requestAnimationFrame(() => syncQualityCamera(true));
     } else {
       placeholder.style.display = "flex";
@@ -2646,13 +2806,19 @@ async function switchTab(mode: ViewerMode): Promise<void> {
   if (mode === "splat") {
     getEl<HTMLButtonElement>("tab-splat").classList.add("active");
     if (!navHudUserToggled) setNavHudVisible(true);
+    splatHost.innerHTML = `<div class="measure-hint" style="padding:16px; display:flex; align-items:center; justify-content:center; height:100%;">Loading 3DGS…</div>`;
+    splatHost.style.display = "block";
+    triggerViewerBlurEnter(splatHost);
+    // Yield to browser paint before reading textures / launching worker (keeps INP < 10 ms)
+    await nextPaint();
+    if (seq !== tabSwitchSeq) return;
     const source = await resolveSplatSource(viewerUSD);
+    if (seq !== tabSwitchSeq) return;
     if (!source) {
+      splatHost.style.display = "none";
       showSplatFallback(placeholder, IntLayer.t.hybridWaiting);
       return;
     }
-    splatHost.style.display = "block";
-    triggerViewerBlurEnter(splatHost);
     try {
       await mountSplatViewer(splatHost, source);
     } catch (e) {
@@ -2675,25 +2841,39 @@ async function switchTab(mode: ViewerMode): Promise<void> {
       showSplatFallback(placeholder, IntLayer.t.hybridWaiting);
       return;
     }
-    const source = await resolveSplatSource(viewerUSD);
-    if (!source) {
-      showSplatFallback(placeholder, IntLayer.t.hybridWaiting);
-      return;
-    }
     hybridHost.style.display = "block";
     triggerViewerBlurEnter(hybridHost);
     syncHybridLayout();
-    meshViewer.orientation = `${rotX}deg ${rotY}deg ${rotZ}deg`;
+    await nextPaint();
+    if (seq !== tabSwitchSeq) return;
+    const source = await resolveSplatSource(viewerUSD);
+    if (seq !== tabSwitchSeq) return;
+    if (!source) {
+      hybridHost.style.display = "none";
+      showSplatFallback(placeholder, IntLayer.t.hybridWaiting);
+      return;
+    }
+    guardModelViewerArBug();
+    const targetOrientation = `${rotX}deg ${rotY}deg ${rotZ}deg`;
+    if (meshViewer.orientation !== targetOrientation) {
+      meshViewer.orientation = targetOrientation;
+    }
     await hydrateHybridMeshMaterial(meshViewer, meshSrc);
+    if (seq !== tabSwitchSeq) return;
     try {
       const orbit = (viewerUSD as any).getCameraOrbit?.();
       const target = (viewerUSD as any).getCameraTarget?.();
+      const fov = (viewerUSD as any).getFieldOfView?.();
       if (orbit) {
         meshViewer.cameraOrbit = `${orbit.theta}rad ${orbit.phi}rad ${orbit.radius}m`;
       }
       if (target) {
         meshViewer.cameraTarget = `${target.x}m ${target.y}m ${target.z}m`;
       }
+      if (typeof fov === "number" && Number.isFinite(fov)) {
+        meshViewer.fieldOfView = `${fov}deg`;
+      }
+      meshViewer.jumpCameraToGoal?.();
     } catch {
       /* ignore if orbit not yet ready */
     }
@@ -2977,20 +3157,25 @@ function normalizeStatsEvent(event: unknown): SysStats | null {
 function updateSystemStats(stats: SysStats): void {
   const gpu = clamp(stats.gpu, 0, 100);
   const vram = clamp(stats.vram, 0, 100);
-  getEl<HTMLDivElement>("sys-time").textContent = stats.time || "--:--:--";
+  const gpuText = getEl<HTMLSpanElement>("gpu-text");
+  const vramText = getEl<HTMLSpanElement>("vram-text");
+  const gpuBar = getEl<HTMLDivElement>("gpu-bar");
+  const vramBar = getEl<HTMLDivElement>("vram-bar");
 
   if (stats.available === false) {
-    getEl<HTMLSpanElement>("gpu-text").textContent = "NVIDIA unavailable";
-    getEl<HTMLSpanElement>("vram-text").textContent = "--";
-    getEl<HTMLDivElement>("gpu-bar").style.width = "0%";
-    getEl<HTMLDivElement>("vram-bar").style.width = "0%";
+    if (gpuText.textContent !== "N/A") gpuText.textContent = "N/A";
+    if (vramText.textContent !== "--") vramText.textContent = "--";
+    gpuBar.style.transform = "scaleX(0)";
+    vramBar.style.transform = "scaleX(0)";
     return;
   }
 
-  getEl<HTMLSpanElement>("gpu-text").textContent = `${gpu.toFixed(1)}%`;
-  getEl<HTMLDivElement>("gpu-bar").style.width = `${gpu}%`;
-  getEl<HTMLSpanElement>("vram-text").textContent = `${vram.toFixed(1)}%`;
-  getEl<HTMLDivElement>("vram-bar").style.width = `${vram}%`;
+  const gpuStr = `${gpu.toFixed(1)}%`;
+  const vramStr = `${vram.toFixed(1)}%`;
+  if (gpuText.textContent !== gpuStr) gpuText.textContent = gpuStr;
+  if (vramText.textContent !== vramStr) vramText.textContent = vramStr;
+  gpuBar.style.transform = `scaleX(${(gpu / 100).toFixed(3)})`;
+  vramBar.style.transform = `scaleX(${(vram / 100).toFixed(3)})`;
 }
 
 function parseTelemetry(raw: string): PipelineTelemetry {
@@ -3121,9 +3306,11 @@ function renderZonesList(zones: BuildingZone[]): void {
       const status = liveStatuses.get(id) || z.status || "unknown";
       z.status = status;
       const primCount = z.prim_count ?? 0;
-      return `<div class="measure-row" data-zone-id="${id}">
-        <div><strong>${label}</strong><div class="measure-hint" data-zone-meta="${id}">${translateZoneStatus(status)} · ${primCount} ${IntLayer.t.zonePrims}</div></div>
-        <select data-zone-status="${id}" class="technical-select" style="width:auto;min-width:110px;">
+      const safeId = escapeHtml(id);
+      const safeLabel = escapeHtml(label);
+      return `<div class="measure-row" data-zone-id="${safeId}">
+        <div><strong>${safeLabel}</strong><div class="measure-hint" data-zone-meta="${safeId}">${translateZoneStatus(status)} · ${primCount} ${IntLayer.t.zonePrims}</div></div>
+        <select id="zone-status-${safeId}" name="zone-status-${safeId}" aria-label="${safeLabel}" data-zone-status="${safeId}" class="technical-select" style="width:auto;min-width:110px;">
           <option value="unknown"${status === "unknown" ? " selected" : ""}>${IntLayer.t.zoneStatusUnknown}</option>
           <option value="ok"${status === "ok" ? " selected" : ""}>${IntLayer.t.zoneStatusOk}</option>
           <option value="replace"${status === "replace" ? " selected" : ""}>${IntLayer.t.zoneStatusReplace}</option>
@@ -3753,8 +3940,137 @@ function renderTelemetryHTML(data: any): string {
   }
 
   html += renderSimReadyCardHTML(data);
+  html += renderOtelTraceCardHTML(data);
 
   return html;
+}
+
+function formatMs(ms: number): string {
+  if (!Number.isFinite(ms) || ms < 0) return "—";
+  if (ms >= 1000) return `${(ms / 1000).toFixed(2)}s`;
+  return `${ms.toFixed(1)} ms`;
+}
+
+function renderOtelTraceCardHTML(data: any): string {
+  const traceId = typeof data?.trace_id === "string" ? data.trace_id : "";
+  const jaegerUrl = typeof data?.jaeger_url === "string" ? data.jaeger_url : "";
+  const edge = (data?.edge_timings_ms || {}) as Record<string, number>;
+  const core = (data?.stage_timings_ms || {}) as Record<string, number>;
+
+  const hasAny =
+    Boolean(traceId) ||
+    Object.keys(edge).length > 0 ||
+    Object.keys(core).length > 0;
+  if (!hasAny) return "";
+
+  const isPl = IntLayer.currentLang === "pl";
+  const stages: Array<{ label: string; ms: number }> = [];
+  if (typeof edge.sha256_ms === "number") {
+    stages.push({ label: "Edge SHA-256", ms: edge.sha256_ms });
+  }
+  if (typeof edge.minio_upload_ms === "number") {
+    stages.push({
+      label: isPl ? "MinIO S3 (wysyłka)" : "MinIO S3 upload",
+      ms: edge.minio_upload_ms,
+    });
+  }
+  if (typeof core.unpack_ms === "number" && core.unpack_ms > 0.5) {
+    stages.push({
+      label: isPl ? "Rozpakowanie USDZ" : "USDZ unpack",
+      ms: core.unpack_ms,
+    });
+  }
+  if (typeof core.usd_traverse_ms === "number") {
+    stages.push({
+      label: isPl ? "Graf sceny OpenUSD" : "OpenUSD traverse",
+      ms: core.usd_traverse_ms,
+    });
+  }
+  if (typeof core.ntc_ms === "number") {
+    stages.push({
+      label: "NVIDIA RTX NTC",
+      ms: core.ntc_ms,
+    });
+  }
+  if (typeof core.proxy_glb_ms === "number") {
+    stages.push({
+      label: isPl ? "Eksport Proxy GLB" : "Proxy GLB export",
+      ms: core.proxy_glb_ms,
+    });
+  }
+  if (typeof core.splat_3dgs_ms === "number") {
+    stages.push({
+      label: "3DGS Surfel Proxy",
+      ms: core.splat_3dgs_ms,
+    });
+  }
+  if (typeof core.twin_simready_ms === "number") {
+    stages.push({
+      label: "Twin + SimReady",
+      ms: core.twin_simready_ms,
+    });
+  }
+  if (stages.length <= 2 && typeof edge.core_rpc_ms === "number") {
+    stages.push({
+      label: isPl ? "Potok Core gRPC" : "Core gRPC pipeline",
+      ms: edge.core_rpc_ms,
+    });
+  }
+  if (typeof edge.minio_download_ms === "number") {
+    stages.push({
+      label: isPl ? "MinIO S3 (odbiór GLB)" : "MinIO S3 proxy pull",
+      ms: edge.minio_download_ms,
+    });
+  }
+
+  const totalMs =
+    typeof edge.total_ms === "number" && edge.total_ms > 0
+      ? edge.total_ms
+      : stages.reduce((acc, s) => acc + s.ms, 0) || 1;
+
+  const stagesHtml = stages
+    .map((s) => {
+      const pct = Math.max(3, Math.min(100, (s.ms / totalMs) * 100));
+      return `
+        <div class="otel-stage-row">
+          <div class="otel-stage-head">
+            <span>${escapeHtml(s.label)}</span>
+            <strong>${formatMs(s.ms)}</strong>
+          </div>
+          <div class="otel-bar-track"><div class="otel-bar-fill" style="width:${pct.toFixed(1)}%;"></div></div>
+        </div>
+      `;
+    })
+    .join("");
+
+  const shortTrace = traceId ? `${traceId.slice(0, 12)}…` : "local";
+
+  return `
+    <details class="simready-card" open>
+      <summary>
+        <span>${IntLayer.t.otelTitle}</span>
+        <span class="simready-badge ok">${shortTrace}</span>
+      </summary>
+      <div class="simready-checks">
+        ${
+          traceId
+            ? `<div class="otel-actions">
+                <span class="otel-trace-id" title="${escapeHtml(traceId)}">${escapeHtml(traceId)}</span>
+                <div style="display:flex;gap:4px;flex-shrink:0;">
+                  <button type="button" class="nav-reset-btn" data-otel-copy="${escapeHtml(traceId)}">${IntLayer.t.otelCopy}</button>
+                  ${
+                    jaegerUrl
+                      ? `<a class="nav-reset-btn" style="text-decoration:none;" href="${escapeHtml(jaegerUrl)}" target="_blank" rel="noopener noreferrer">${IntLayer.t.otelOpenJaeger}</a>`
+                      : ""
+                  }
+                </div>
+              </div>`
+            : ""
+        }
+        ${stagesHtml}
+      </div>
+    </details>
+  `;
 }
 
 function renderSimReadyCardHTML(data: any): string {
@@ -3967,6 +4283,19 @@ async function hydrateClientNtcQuality(data: any): Promise<void> {
 
 function initTelemetryCharts(data: any): void {
   void hydrateClientNtcQuality(data);
+  document
+    .querySelectorAll<HTMLButtonElement>("[data-otel-copy]")
+    .forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const val = btn.getAttribute("data-otel-copy") || "";
+        if (!val) return;
+        navigator.clipboard?.writeText(val).then(() => {
+          const orig = btn.textContent || IntLayer.t.otelCopy;
+          animateBlurValue(btn, IntLayer.t.otelCopied);
+          window.setTimeout(() => animateBlurValue(btn, orig), 1400);
+        });
+      });
+    });
   if (
     !data ||
     !data.ntc_compressed_files ||

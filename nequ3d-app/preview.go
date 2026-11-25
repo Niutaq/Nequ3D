@@ -120,7 +120,7 @@ func (p *previewFiles) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Wails uses different origins in development and packaged builds. The
 	// per-session capability is required even when the request has no Origin.
 	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Cache-Control", "private, no-store")
+	w.Header().Set("Cache-Control", "private, max-age=300")
 	w.Header().Set("Referrer-Policy", "no-referrer")
 	http.ServeFile(w, r, canonical)
 }

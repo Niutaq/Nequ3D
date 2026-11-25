@@ -41,6 +41,7 @@ switch ($Action) {
             '-e', 'MINIO_SECRET_KEY',
             '-e', "MINIO_ENDPOINT=http://${hostFromContainer}:9000",
             '-e', "LOCATE_SERVICE_URL=http://${hostFromContainer}:8000",
+            '-e', "OTEL_EXPORTER_OTLP_ENDPOINT=http://${hostFromContainer}:4318",
             '--mount', "type=bind,source=$objects,target=/tmp/workspace",
             '-p', '127.0.0.1:50051:50051',
             '-p', '127.0.0.1:8001:8001'

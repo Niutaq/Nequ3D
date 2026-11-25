@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 type agentRequest struct {
@@ -39,6 +41,9 @@ type agentPlan struct {
 
 // RunRenovationAgent executes a local tool-using renovation workflow via Ollama planning + Go tools.
 func (a *App) RunRenovationAgent(requestJSON string) (string, error) {
+	_, agentSpan := edgeTracer().Start(context.Background(), "nequ3d.edge.renovation_agent")
+	defer agentSpan.End()
+
 	var req agentRequest
 	if err := json.Unmarshal([]byte(requestJSON), &req); err != nil {
 		return "", fmt.Errorf("invalid agent request: %w", err)
@@ -71,6 +76,10 @@ func (a *App) RunRenovationAgent(requestJSON string) (string, error) {
 		emit(agentStep{Tool: "plan", Status: "error", Detail: err.Error()})
 	}
 	tools := normalizeAgentPlan(plannedTools, req, hasLocatePrompt)
+	agentSpan.SetAttributes(
+		attribute.String("nequ3d.agent.model", sanitizeOllamaModel(req.Model)),
+		attribute.StringSlice("nequ3d.agent.tools", tools),
+	)
 	emit(agentStep{Tool: "plan", Status: "ok", Detail: strings.Join(tools, ","), Payload: tools})
 
 	telemetry := strings.TrimSpace(req.Telemetry)

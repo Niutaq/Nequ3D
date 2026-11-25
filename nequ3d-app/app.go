@@ -20,6 +20,9 @@ import (
 	pb "changeme/pipeline_rpc/pipeline"
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -447,18 +450,73 @@ func trimForError(body []byte) string {
 }
 
 func startGPUStatsTicker(app *application.App) {
-	ticker := time.NewTicker(time.Second)
 	go func() {
+		var lastGPU, lastVRAM float64 = -1, -1
+		var lastAvailable = true
+		var lastEmit time.Time
+
+		maybeEmit := func(s SystemStats) {
+			gpuChanged := mathAbs(s.GPU-lastGPU) >= 0.2 || mathAbs(s.VRAM-lastVRAM) >= 0.2 || s.Available != lastAvailable
+			if !gpuChanged && time.Since(lastEmit) < 10*time.Second {
+				return
+			}
+			lastGPU, lastVRAM, lastAvailable = s.GPU, s.VRAM, s.Available
+			lastEmit = time.Now()
+			app.Event.Emit("sysStats", s)
+		}
+
+		// Try persistent single-process nvidia-smi stream (-lms 2500) to avoid spawning OS processes every second.
+		cmd := exec.Command(
+			"nvidia-smi",
+			"--query-gpu=utilization.gpu,memory.used,memory.total",
+			"--format=csv,noheader,nounits",
+			"-lms", "2500",
+		)
+		configureBackgroundCommand(cmd)
+		stdout, err := cmd.StdoutPipe()
+		if err == nil && cmd.Start() == nil {
+			scanner := bufio.NewScanner(stdout)
+			for scanner.Scan() {
+				maybeEmit(parseNVIDIACSVLine(scanner.Text()))
+			}
+			_ = cmd.Wait()
+		}
+
+		// Fallback polling (e.g. if nvidia-smi is unavailable on machine)
+		ticker := time.NewTicker(5 * time.Second)
 		defer ticker.Stop()
 		for {
-			emitGPUStats(app)
+			maybeEmit(queryNVIDIAStats())
 			<-ticker.C
 		}
 	}()
 }
 
-func emitGPUStats(app *application.App) {
-	app.Event.Emit("sysStats", queryNVIDIAStats())
+func mathAbs(v float64) float64 {
+	if v < 0 {
+		return -v
+	}
+	return v
+}
+
+func parseNVIDIACSVLine(line string) SystemStats {
+	stats := SystemStats{Time: time.Now().Format("15:04:05")}
+	parts := strings.Split(strings.TrimSpace(line), ",")
+	if len(parts) < 3 {
+		stats.Available = false
+		return stats
+	}
+	gpuUtil, err1 := strconv.ParseFloat(strings.TrimSpace(parts[0]), 64)
+	memUsed, err2 := strconv.ParseFloat(strings.TrimSpace(parts[1]), 64)
+	memTotal, err3 := strconv.ParseFloat(strings.TrimSpace(parts[2]), 64)
+	if err1 != nil || err2 != nil || err3 != nil || memTotal <= 0 {
+		stats.Available = false
+		return stats
+	}
+	stats.GPU = gpuUtil
+	stats.VRAM = (memUsed / memTotal) * 100
+	stats.Available = true
+	return stats
 }
 
 func queryNVIDIAStats() SystemStats {
@@ -567,6 +625,12 @@ func (a *App) ProcessModel(absolutePath string, bpp string, steps string) (strin
 		return "", fmt.Errorf("unsupported asset format %q", ext)
 	}
 
+	tStart := time.Now()
+	rootCtx, rootSpan := edgeTracer().Start(context.Background(), "nequ3d.edge.process_model")
+	defer rootSpan.End()
+	traceID := rootSpan.SpanContext().TraceID().String()
+	edgeTimings := map[string]float64{}
+
 	// Connect to Python gRPC server (exposed via task run-core on port 50051)
 	conn, err := grpc.NewClient(coreAddress(),
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
@@ -576,6 +640,8 @@ func (a *App) ProcessModel(absolutePath string, bpp string, steps string) (strin
 		),
 	)
 	if err != nil {
+		rootSpan.RecordError(err)
+		rootSpan.SetStatus(codes.Error, err.Error())
 		return "", fmt.Errorf("failed to connect to gRPC server: %v", err)
 	}
 	defer conn.Close()
@@ -584,8 +650,12 @@ func (a *App) ProcessModel(absolutePath string, bpp string, steps string) (strin
 
 	bppInt, _ := strconv.Atoi(bpp)
 	stepsInt, _ := strconv.Atoi(steps)
-
 	fileName := filepath.Base(absolutePath)
+	rootSpan.SetAttributes(
+		attribute.String("nequ3d.asset.name", fileName),
+		attribute.Int("nequ3d.ntc.bpp", bppInt),
+		attribute.Int("nequ3d.ntc.steps", stepsInt),
+	)
 
 	// The launcher inherits these credentials from the Kubernetes secret.
 	accessKey, secretKey := os.Getenv("MINIO_ACCESS_KEY"), os.Getenv("MINIO_SECRET_KEY")
@@ -601,13 +671,14 @@ func (a *App) ProcessModel(absolutePath string, bpp string, steps string) (strin
 		Secure: false,
 	})
 	if err != nil {
+		rootSpan.RecordError(err)
 		return "", fmt.Errorf("failed to init MinIO client: %v", err)
 	}
 
 	bucketName := "raw-scans"
-	exists, errBucket := minioClient.BucketExists(context.Background(), bucketName)
+	exists, errBucket := minioClient.BucketExists(rootCtx, bucketName)
 	if errBucket == nil && !exists {
-		err = minioClient.MakeBucket(context.Background(), bucketName, minio.MakeBucketOptions{})
+		err = minioClient.MakeBucket(rootCtx, bucketName, minio.MakeBucketOptions{})
 		if err != nil {
 			fmt.Printf("[Wails Backend] Warning: could not create bucket %s: %v\n", bucketName, err)
 		} else {
@@ -615,9 +686,9 @@ func (a *App) ProcessModel(absolutePath string, bpp string, steps string) (strin
 		}
 	}
 
-	exists, errBucket = minioClient.BucketExists(context.Background(), "processed-models")
+	exists, errBucket = minioClient.BucketExists(rootCtx, "processed-models")
 	if errBucket == nil && !exists {
-		err = minioClient.MakeBucket(context.Background(), "processed-models", minio.MakeBucketOptions{})
+		err = minioClient.MakeBucket(rootCtx, "processed-models", minio.MakeBucketOptions{})
 		if err != nil {
 			fmt.Printf("[Wails Backend] Warning: could not create bucket processed-models: %v\n", err)
 		} else {
@@ -627,11 +698,15 @@ func (a *App) ProcessModel(absolutePath string, bpp string, steps string) (strin
 
 	objectKey := fmt.Sprintf("%s-%s", rand.Text(), fileName)
 
+	tSha := time.Now()
+	_, shaSpan := edgeTracer().Start(rootCtx, "nequ3d.edge.integrity_sha256")
 	sourceDigest, err := writeIntegritySidecar(absolutePath, map[string]any{
 		"kind":   "edge_upload",
 		"bucket": bucketName,
 		"key":    objectKey,
 	})
+	shaSpan.End()
+	edgeTimings["sha256_ms"] = float64(time.Since(tSha).Microseconds()) / 1000.0
 	if err != nil {
 		fmt.Printf("[Wails Backend] Warning: integrity sidecar failed: %v\n", err)
 	} else {
@@ -643,11 +718,19 @@ func (a *App) ProcessModel(absolutePath string, bpp string, steps string) (strin
 		UserMetadata: map[string]string{
 			"sha256":          sourceDigest,
 			"nequ3d-pipeline": "building-renovation-twin",
+			"trace-id":        traceID,
 		},
 	}
+	tUp := time.Now()
+	_, upSpan := edgeTracer().Start(rootCtx, "nequ3d.edge.minio_upload")
+	upSpan.SetAttributes(attribute.String("s3.bucket", bucketName), attribute.String("s3.key", objectKey))
 	// Prefer bucket-default SSE-S3 / KMS on MinIO (see gitops/apps/minio-standalone.yaml).
-	_, err = minioClient.FPutObject(context.Background(), bucketName, objectKey, absolutePath, putOpts)
+	_, err = minioClient.FPutObject(rootCtx, bucketName, objectKey, absolutePath, putOpts)
+	upSpan.End()
+	edgeTimings["minio_upload_ms"] = float64(time.Since(tUp).Microseconds()) / 1000.0
 	if err != nil {
+		rootSpan.RecordError(err)
+		rootSpan.SetStatus(codes.Error, err.Error())
 		return "", fmt.Errorf("failed to upload to MinIO: %v", err)
 	}
 	fmt.Printf("[Wails Backend] Upload to MinIO complete!\n")
@@ -659,11 +742,16 @@ func (a *App) ProcessModel(absolutePath string, bpp string, steps string) (strin
 		TrainingSteps: int32(stepsInt),
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	tRpc := time.Now()
+	rpcSpanCtx, rpcSpan := edgeTracer().Start(rootCtx, "nequ3d.edge.core_grpc_stream")
+	ctx, cancel := context.WithTimeout(injectTraceMetadata(rpcSpanCtx), 15*time.Minute)
 	defer cancel()
 
 	stream, err := client.ProcessModel(ctx, req)
 	if err != nil {
+		rpcSpan.RecordError(err)
+		rpcSpan.End()
+		rootSpan.SetStatus(codes.Error, err.Error())
 		return "", fmt.Errorf("gRPC ProcessModel stream failed: %v", err)
 	}
 
@@ -675,24 +763,31 @@ func (a *App) ProcessModel(absolutePath string, bpp string, steps string) (strin
 			break
 		}
 		if err != nil {
+			rpcSpan.RecordError(err)
+			rpcSpan.End()
+			rootSpan.SetStatus(codes.Error, err.Error())
 			return "", fmt.Errorf("error receiving gRPC stream: %v", err)
 		}
 
 		switch update.UpdateType {
 		case "info":
 			fmt.Println("[gRPC Stream]", update.Message)
-			// Emit live log to frontend if you want to show it in the UI!
 			application.Get().Event.Emit("pipelineLog", update.Message)
 		case "error":
+			rpcSpan.End()
+			rootSpan.SetStatus(codes.Error, update.Message)
 			return "", fmt.Errorf("pipeline error: %s", update.Message)
 		case "result":
+			edgeTimings["core_rpc_ms"] = float64(time.Since(tRpc).Microseconds()) / 1000.0
 			jsonResult = update.TelemetryJson
 
 			if update.ProxyGlbS3Key != "" {
+				tDl := time.Now()
+				_, dlSpan := edgeTracer().Start(rootCtx, "nequ3d.edge.minio_download_proxy")
 				tempFile, err := os.CreateTemp("", "proxy_*.glb")
 				if err == nil {
-					tempFile.Close() // Close it so MinIO can write to it via FGetObject
-					err = minioClient.FGetObject(context.Background(), "processed-models", update.ProxyGlbS3Key, tempFile.Name(), minio.GetObjectOptions{})
+					tempFile.Close()
+					err = minioClient.FGetObject(rootCtx, "processed-models", update.ProxyGlbS3Key, tempFile.Name(), minio.GetObjectOptions{})
 					if err == nil {
 						var telemetryMap map[string]any
 						if err := json.Unmarshal([]byte(jsonResult), &telemetryMap); err == nil {
@@ -705,15 +800,22 @@ func (a *App) ProcessModel(absolutePath string, bpp string, steps string) (strin
 						fmt.Printf("[Wails Backend] Warning: failed to download proxy GLB from MinIO: %v\n", err)
 					}
 				}
+				dlSpan.End()
+				edgeTimings["minio_download_ms"] = float64(time.Since(tDl).Microseconds()) / 1000.0
 			}
 
 			jsonResult = remapTwinPathsForHost(jsonResult)
 		}
 	}
+	rpcSpan.End()
 
 	if jsonResult == "" || jsonResult == "{}" {
 		return "", fmt.Errorf("pipeline executed successfully but returned no JSON telemetry")
 	}
+
+	edgeTimings["total_ms"] = float64(time.Since(tStart).Microseconds()) / 1000.0
+	jsonResult = enrichTelemetryWithTrace(jsonResult, traceID, edgeTimings)
+	rootSpan.SetStatus(codes.Ok, "completed")
 
 	fmt.Printf("[Wails Backend] Successfully received telemetry for %s. Processing finished.\n", fileName)
 
@@ -728,6 +830,29 @@ func isUSDAssetExtension(ext string) bool {
 	default:
 		return false
 	}
+}
+
+func enrichTelemetryWithTrace(telemetryJSON string, traceID string, edgeTimings map[string]float64) string {
+	var m map[string]any
+	if err := json.Unmarshal([]byte(telemetryJSON), &m); err != nil || m == nil {
+		return telemetryJSON
+	}
+	if traceID != "" && traceID != "00000000000000000000000000000000" {
+		m["trace_id"] = traceID
+		m["jaeger_url"] = jaegerTraceURL(traceID)
+	}
+	if len(edgeTimings) > 0 {
+		rounded := make(map[string]float64, len(edgeTimings))
+		for k, v := range edgeTimings {
+			rounded[k] = float64(int64(v*10+0.5)) / 10.0
+		}
+		m["edge_timings_ms"] = rounded
+	}
+	out, err := json.Marshal(m)
+	if err != nil {
+		return telemetryJSON
+	}
+	return string(out)
 }
 
 // remapTwinPathsForHost rewrites Core container twin paths to the Windows workspace mount.
@@ -822,8 +947,15 @@ func (a *App) LocateObjects(imageBase64 string, prompt string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	resp, err := client.LocateObjects(ctx, req)
+	ctx, locateSpan := edgeTracer().Start(ctx, "nequ3d.edge.locate_objects",
+		trace.WithAttributes(attribute.String("nequ3d.prompt", prompt)),
+	)
+	defer locateSpan.End()
+
+	resp, err := client.LocateObjects(injectTraceMetadata(ctx), req)
 	if err != nil {
+		locateSpan.RecordError(err)
+		locateSpan.SetStatus(codes.Error, err.Error())
 		return "", fmt.Errorf("gRPC LocateObjects failed: %v (is LocateAnything on :8000? start with: pwsh -File ./scripts/run-all.ps1 -WithLocate)", err)
 	}
 

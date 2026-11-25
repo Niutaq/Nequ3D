@@ -187,6 +187,17 @@ function Ensure-CncfStack {
         Write-Host "Warning: missing $monitoringApp — skip kube-prometheus-stack Application" -ForegroundColor Yellow
     }
 
+    $jaegerManifest = Join-Path $GitOpsApps 'jaeger-standalone.yaml'
+    $jaegerReady = $false
+    if (Test-Path $jaegerManifest) {
+        & kubectl create namespace monitoring --dry-run=client -o yaml | kubectl apply -f - *> $null
+        & kubectl apply -f $jaegerManifest
+        if ($LASTEXITCODE -eq 0) {
+            & kubectl wait --for=condition=Available deployment/jaeger -n monitoring --timeout=45s *> $null
+            if ($LASTEXITCODE -eq 0) { $jaegerReady = $true }
+        }
+    }
+
     # Port-forwards (skip if already listening — e.g. previous session / manual PF).
     if (-not (Test-PortListen 8080)) {
         Start-KubectlForward @('port-forward', 'svc/argocd-server', '8080:443', '-n', 'argocd') 'argo-forward' | Out-Null
@@ -215,6 +226,15 @@ function Ensure-CncfStack {
     if ($promReady -and -not (Test-PortListen 9090)) {
         Start-KubectlForward @('port-forward', 'svc/kube-prometheus-stack-prometheus', '9090:9090', '-n', 'monitoring') 'prometheus-forward' | Out-Null
     }
+    if ($jaegerReady) {
+        if (-not (Test-PortListen 16686) -and -not (Test-PortListen 4318)) {
+            Start-KubectlForward @('port-forward', '--address', '0.0.0.0', 'svc/jaeger', '16686:16686', '4318:4318', '-n', 'monitoring') 'jaeger-forward' | Out-Null
+        } elseif (-not (Test-PortListen 4318)) {
+            Start-KubectlForward @('port-forward', '--address', '0.0.0.0', 'svc/jaeger', '4318:4318', '-n', 'monitoring') 'jaeger-otlp-forward' | Out-Null
+        } elseif (-not (Test-PortListen 16686)) {
+            Start-KubectlForward @('port-forward', 'svc/jaeger', '16686:16686', '-n', 'monitoring') 'jaeger-ui-forward' | Out-Null
+        }
+    }
 
     $argoPass = ''
     try {
@@ -238,6 +258,11 @@ function Ensure-CncfStack {
         Write-Host '  Prometheus     http://127.0.0.1:9090'
     } else {
         Write-Host '  Prometheus     (pending — same as Grafana)' -ForegroundColor Yellow
+    }
+    if ($jaegerReady) {
+        Write-Host '  Jaeger (OTel)  http://127.0.0.1:16686  (OTLP HTTP :4318)'
+    } else {
+        Write-Host '  Jaeger (OTel)  (pending — run task jaeger-ui once image pulls)' -ForegroundColor Yellow
     }
     Write-Host '===============================' -ForegroundColor Cyan
     Write-Host ''
@@ -506,10 +531,10 @@ Apply gitops/apps/minio-standalone.yaml (and the minio-credentials secret) into 
     }
 
     $busyPorts = @(9000, 50051, 8001, 9245)
-    if ($EnableStack) { $busyPorts += @(8080, 3000, 9090, 9001) }
+    if ($EnableStack) { $busyPorts += @(8080, 3000, 9090, 9001, 16686, 4318) }
     foreach ($port in $busyPorts) {
         # Stack UI ports may already be forwarded from a previous helper — only hard-fail core ports.
-        if ($port -in @(8080, 3000, 9090, 9001) -and (Test-PortListen $port)) { continue }
+        if ($port -in @(8080, 3000, 9090, 9001, 16686, 4318) -and (Test-PortListen $port)) { continue }
         if (Test-PortListen $port) {
             throw "Port $port is already in use. Stop the previous Nequ3D session before starting."
         }
@@ -534,6 +559,8 @@ Apply gitops/apps/minio-standalone.yaml (and the minio-credentials secret) into 
     $minioEndpoint = "http://${MinioHostFromContainer}:9000"
     # LocateAnything listens on the host; Core must reach it via the gateway hostname.
     $locateEndpoint = "http://${MinioHostFromContainer}:8000"
+    $otelContainerEndpoint = "http://${MinioHostFromContainer}:4318"
+    $env:OTEL_EXPORTER_OTLP_ENDPOINT = 'http://127.0.0.1:4318'
     $runArgs = @(
         'run', '-d', '--rm', '--name', $CoreName,
         '--gpus', 'all',
@@ -541,6 +568,7 @@ Apply gitops/apps/minio-standalone.yaml (and the minio-credentials secret) into 
         '-e', 'MINIO_SECRET_KEY',
         '-e', "MINIO_ENDPOINT=$minioEndpoint",
         '-e', "LOCATE_SERVICE_URL=$locateEndpoint",
+        '-e', "OTEL_EXPORTER_OTLP_ENDPOINT=$otelContainerEndpoint",
         '--mount', "type=bind,source=$Objects,target=/tmp/workspace",
         '-p', '127.0.0.1:50051:50051',
         '-p', '127.0.0.1:8001:8001',
@@ -556,6 +584,7 @@ Apply gitops/apps/minio-standalone.yaml (and the minio-credentials secret) into 
             '-e', 'MINIO_SECRET_KEY',
             '-e', "MINIO_ENDPOINT=$minioEndpoint",
             '-e', "LOCATE_SERVICE_URL=$locateEndpoint",
+            '-e', "OTEL_EXPORTER_OTLP_ENDPOINT=$otelContainerEndpoint",
             '--mount', "type=bind,source=$Objects,target=/tmp/workspace",
             '-p', '127.0.0.1:50051:50051',
             '-p', '127.0.0.1:8001:8001',

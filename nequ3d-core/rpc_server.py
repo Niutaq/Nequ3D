@@ -1,3 +1,4 @@
+import contextlib
 import json
 import logging
 import os
@@ -12,6 +13,7 @@ import grpc
 import requests
 from prometheus_client import Gauge, start_http_server
 from pythonjsonlogger import jsonlogger
+from otel_setup import extract_parent_context, flush_otel, format_current_traceparent, init_core_tracer, start_span
 
 minio_endpoint = os.environ.get('MINIO_ENDPOINT', 'http://127.0.0.1:9000')
 
@@ -56,10 +58,28 @@ from pipeline import pipeline_pb2, pipeline_pb2_grpc
 ansi_escape = re.compile(r"(?:\x1B[@-_]|[\x80-\x9F])[0-?]*[ -/]*[@-~]|[\x00-\x1F\x7F]")
 
 
+def _grpc_parent_ctx(context):
+    try:
+        md = context.invocation_metadata() if context and hasattr(context, "invocation_metadata") else None
+        if not md:
+            return None
+        return extract_parent_context({str(k).lower(): str(v) for k, v in md})
+    except Exception:
+        return None
+
+
 class NtcPipelineService(pipeline_pb2_grpc.NtcPipelineServiceServicer):
     def ProcessModel(self, request, context):
         ACTIVE_GRPC_REQUESTS.inc()
+        span_stack = contextlib.ExitStack()
         try:
+            span_stack.enter_context(
+                start_span(
+                    "nequ3d.core.rpc_process_model",
+                    {"nequ3d.file_name": request.file_name, "nequ3d.s3_key": request.s3_object_key},
+                    parent_context=_grpc_parent_ctx(context),
+                )
+            )
             logger.info("Starting processing model", extra={"file_name": request.file_name})
             yield pipeline_pb2.ProcessModelResponse(
                 update_type="info", message=f"Starting model processing: {request.file_name}"
@@ -73,11 +93,16 @@ class NtcPipelineService(pipeline_pb2_grpc.NtcPipelineServiceServicer):
             model_dir = tempfile.mkdtemp(prefix="job-", dir=workspace)
             file_path = os.path.join(model_dir, name)
             logger.info("Downloading model from MinIO", extra={"object_key": request.s3_object_key})
-            s3_client.download_file("raw-scans", request.s3_object_key, file_path)
+            with start_span("nequ3d.core.s3_download", {"s3.bucket": "raw-scans", "s3.key": request.s3_object_key}):
+                s3_client.download_file("raw-scans", request.s3_object_key, file_path)
+            sub_env = os.environ.copy()
+            tp_hdr = format_current_traceparent()
+            if tp_hdr:
+                sub_env["TRACEPARENT"] = tp_hdr
             cmd = [sys.executable, "-u", "process_usd_file.py", file_path,
                    str(request.target_bitrate), str(request.training_steps)]
             process = subprocess.Popen(
-                cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=sub_env
             )
 
             telemetry_json = None
@@ -159,10 +184,13 @@ class NtcPipelineService(pipeline_pb2_grpc.NtcPipelineServiceServicer):
             logger.error("Server error", extra={"error": str(e)})
             yield pipeline_pb2.ProcessModelResponse(update_type="error", message=str(e))
         finally:
+            span_stack.close()
+            flush_otel()
             ACTIVE_GRPC_REQUESTS.dec()
 
     def LocateObjects(self, request, context):
         ACTIVE_GRPC_REQUESTS.inc()
+        span_stack = contextlib.ExitStack()
         logger.info(
             "Received LocateObjects request",
             extra={
@@ -172,6 +200,13 @@ class NtcPipelineService(pipeline_pb2_grpc.NtcPipelineServiceServicer):
         )
 
         try:
+            span_stack.enter_context(
+                start_span(
+                    "nequ3d.core.rpc_locate_objects",
+                    {"nequ3d.prompt": request.prompt, "nequ3d.image_bytes": len(request.image_data)},
+                    parent_context=_grpc_parent_ctx(context),
+                )
+            )
             locate_service_url = os.environ.get(
                 "LOCATE_SERVICE_URL", "http://localhost:8000"
             )
@@ -212,11 +247,14 @@ class NtcPipelineService(pipeline_pb2_grpc.NtcPipelineServiceServicer):
             context.set_details(str(e))
             return pipeline_pb2.LocateResponse(message=str(e))
         finally:
+            span_stack.close()
+            flush_otel()
             ACTIVE_GRPC_REQUESTS.dec()
 
 
 def serve():
     # Start Prometheus metrics server
+    init_core_tracer("nequ3d-core")
     start_http_server(8001)
     logger.info("Started Prometheus metrics server on port 8001")
 

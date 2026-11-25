@@ -52,9 +52,9 @@ RUN ln -s /opt/RTXNTC/bin/linux-x64/ntc-cli /usr/local/bin/ntc-cli
 
 # 5. Initialize Nequ3D Core Workspace
 WORKDIR /app
-COPY . /app/
-
+COPY requirements.txt /app/requirements.txt
 RUN pip3 install -r requirements.txt
+COPY . /app/
 
 # Start the gRPC server
 CMD ["python3", "-u", "rpc_server.py"]

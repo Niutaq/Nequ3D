@@ -32,6 +32,8 @@ spec:
                   key: rootPassword
             - name: MINIO_ENDPOINT
               value: "http://minio.minio.svc.cluster.local:9000"
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: "http://jaeger.monitoring.svc.cluster.local:4318"
             - name: NVIDIA_VISIBLE_DEVICES
               value: "all"
             - name: NVIDIA_DRIVER_CAPABILITIES
