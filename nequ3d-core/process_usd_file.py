@@ -847,12 +847,14 @@ def _analyze_usd_stage_inner(file_path, target_bpp="5", target_steps="150", unpa
                     )
                     if p
                 ],
+                telemetry=telemetry,
             )
             telemetry["omniverse_export_dir"] = export_info.get("export_dir", "")
             telemetry["simready_ready"] = bool(
                 (export_info.get("checklist") or {}).get("ready_for_kit_import")
             )
             telemetry["simready_checklist"] = export_info.get("checklist")
+            telemetry["provenance"] = export_info.get("provenance")
         except Exception as e:
             print(f"[Core Python] Warning: twin/Omniverse packaging failed: {e}")
             telemetry["twin_error"] = str(e)
