@@ -72,9 +72,28 @@ jobs:
       - run: python -m unittest discover -s . -p "test_*.py" -v
 
   helm-lint:
-    name: Helm Chart Lint
+    name: Helm, Kyverno, Tetragon, KEDA & Trivy SBOM Audit
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
       - uses: azure/setup-helm@v5
-      - run: helm lint helm/nequ3d-core
+      - name: Lint Helm chart (default + KEDA enabled)
+        run: |
+          helm lint helm/nequ3d-core
+          helm lint helm/nequ3d-core --set keda.enabled=true --set keda.natsJetStream.enabled=true
+      - name: Enforce Kyverno policies, Tetragon eBPF shield & generate CycloneDX SBOM
+        run: |
+          pip install pyyaml
+          python scripts/verify-netsecops.py
+      - name: Run Trivy K8s Misconfiguration & CycloneDX SBOM Scan
+        run: |
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sudo sh -s -- -b /usr/local/bin
+          mkdir -p /tmp/k8s-audit
+          helm template nequ3d-core helm/nequ3d-core --set keda.enabled=true > /tmp/k8s-audit/nequ3d-core.yaml
+          cp gitops/apps/jaeger-standalone.yaml /tmp/k8s-audit/
+          cp gitops/apps/minio-standalone.yaml /tmp/k8s-audit/
+          trivy config --severity CRITICAL --exit-code 1 /tmp/k8s-audit
+          trivy fs --scanners vuln --format cyclonedx --output /tmp/nequ3d-trivy.cdx.json .

@@ -154,3 +154,8 @@ tasks:
     platforms: [windows]
     cmds:
       - pwsh -NoProfile -File ./scripts/push-oras-twin.ps1 -TwinDir "{{.TWIN_DIR}}" -DryRun
+
+  security-audit:
+    desc: Audits Helm/K8s manifests against Kyverno policies, validates Tetragon eBPF & KEDA, and builds CycloneDX SBOM
+    cmds:
+      - python ./scripts/verify-netsecops.py

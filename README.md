@@ -42,8 +42,8 @@ Nequ3D turns **Reality Scan** captures into an **OpenUSD Building Renovation Dig
 | **RPC & Events** | ![gRPC](https://img.shields.io/badge/gRPC-Protobuf-244C5A) ![CloudEvents](https://img.shields.io/badge/CloudEvents-v1.0-1D4ED8?logo=cloudevents&logoColor=white) ![NATS JetStream](https://img.shields.io/badge/NATS_JetStream-durable-27AAE1?logo=natsdotio&logoColor=white) | Streaming Edge ↔ Core pipeline RPC & persistent digital-twin event timeline |
 | **Provenance & OCI** | ![in-toto](https://img.shields.io/badge/in--toto-SLSA_v1-0F766E) ![ORAS](https://img.shields.io/badge/ORAS-OCI_Artifacts-4F46E5) ![MinIO](https://img.shields.io/badge/MinIO-S3_API-C72E49?logo=minio&logoColor=white) | DSSE supply-chain attestations, OCI twin packaging & S3 buckets (`raw-scans` / `processed-models`) |
 | **Offline AI & Evals** | ![Ollama](https://img.shields.io/badge/Ollama-local-111827?logo=ollama&logoColor=white) ![Faithfulness Eval](https://img.shields.io/badge/Faithfulness-Telemetry_Judge-059669) ![LocateAnything](https://img.shields.io/badge/LocateAnything-optional-6366F1) | Local LLM planner/advisor (`gemma:2b` / `llama3` / `llava`) + automated numerical faithfulness scorer |
-| **Containers & K8s** | ![Docker](https://img.shields.io/badge/Docker-GPU-2496ED?logo=docker&logoColor=white) ![Podman](https://img.shields.io/badge/Podman-5+-892CA0?logo=podman&logoColor=white) ![Kubernetes](https://img.shields.io/badge/Kubernetes-local-326CE5?logo=kubernetes&logoColor=white) ![Helm](https://img.shields.io/badge/Helm-v3-0F1689?logo=helm&logoColor=white) | `nequ3d-core:v4` GPU container + local cluster packaging |
-| **GitOps & Secrets** | ![Argo CD](https://img.shields.io/badge/Argo_CD-GitOps-EF7B4D?logo=argo&logoColor=white) ![Sealed Secrets](https://img.shields.io/badge/Sealed_Secrets-CNCF-1F2937) | Declarative cluster sync and encrypted Kubernetes secrets |
+| **Containers & K8s** | ![Docker](https://img.shields.io/badge/Docker-GPU-2496ED?logo=docker&logoColor=white) ![Podman](https://img.shields.io/badge/Podman-5+-892CA0?logo=podman&logoColor=white) ![Kubernetes](https://img.shields.io/badge/Kubernetes-local-326CE5?logo=kubernetes&logoColor=white) ![Helm](https://img.shields.io/badge/Helm-v3-0F1689?logo=helm&logoColor=white) ![KEDA](https://img.shields.io/badge/KEDA-GPU_Autoscaler-326CE5) | `nequ3d-core:v4` GPU container, local cluster packaging & scale-to-zero `ScaledObject` |
+| **GitOps & NetSecOps** | ![Argo CD](https://img.shields.io/badge/Argo_CD-GitOps-EF7B4D?logo=argo&logoColor=white) ![Sealed Secrets](https://img.shields.io/badge/Sealed_Secrets-CNCF-1F2937) ![Kyverno](https://img.shields.io/badge/Kyverno-Policy_as_Code-F36B21) ![Tetragon](https://img.shields.io/badge/Tetragon-eBPF_Shield-F8C517?logo=cilium&logoColor=black) ![Trivy](https://img.shields.io/badge/Trivy-SBOM_%26_Audit-1904DA?logo=trivy&logoColor=white) | Declarative sync, encrypted secrets, admission policies, eBPF runtime sandboxing & CycloneDX SBOM |
 | **Observability** | ![OpenTelemetry](https://img.shields.io/badge/OpenTelemetry-OTLP-425CC7?logo=opentelemetry&logoColor=white) ![Jaeger](https://img.shields.io/badge/Jaeger-tracing-60D0E4?logo=jaeger&logoColor=black) ![Prometheus](https://img.shields.io/badge/Prometheus-metrics-E6522C?logo=prometheus&logoColor=white) ![Grafana](https://img.shields.io/badge/Grafana-dashboards-F46800?logo=grafana&logoColor=white) | End-to-end W3C trace propagation (Edge → gRPC → Core), Core metrics (`:8001`) & dashboards |
 | **Research & CI** | ![marimo](https://img.shields.io/badge/marimo-notebook-10B981) ![Task](https://img.shields.io/badge/Task-runner-29BEB0?logo=task&logoColor=white) ![GitHub Actions](https://img.shields.io/badge/GitHub_Actions-CI-2088FF?logo=githubactions&logoColor=white) | Reactive NTC rate-distortion & LaTeX notebook (`task notebook`) + automated CI |
 
@@ -169,7 +169,7 @@ Results: `experiments/results/run-<timestamp>.json` (+ CSV). **README tables sho
 
 ## Security (scan protection)
 
-Reality Scan data can reveal real interiors. Controls include SHA-256 sidecars, MinIO object metadata, loopback preview tokens, and local-first Ollama.
+Reality Scan data can reveal real interiors. Controls include SHA-256 sidecars, MinIO object metadata, loopback preview tokens, **in-toto (`SLSA v1`) + ORAS** provenance, **Kyverno** admission policies, **Tetragon eBPF** runtime sandboxing (architectural foundation for OCI eBPF shields such as *Shirudo*), **Trivy + CycloneDX SBOM**, and local-first Ollama. Full architecture: [docs/security-threat-model.md](docs/security-threat-model.md).
 
 ## Optional AI
 
@@ -195,6 +195,8 @@ Ollama on `localhost:11434`. Default model: `gemma:2b`. If Ollama is down, **Run
 | `task run-core` | Core only |
 | `task proto` | Regenerate gRPC stubs |
 | `task jaeger-ui` | Port-forward Jaeger UI (`:16686`) & OTLP HTTP (`:4318`) |
+| `task security-audit` | Verify Kyverno policies, Tetragon eBPF, KEDA & generate CycloneDX SBOM |
+| `task notebook` | Open reactive `marimo` thesis benchmark & LaTeX `booktabs` notebook |
 | `wails3 build` in `nequ3d-app` | Desktop binary under `nequ3d-app/bin` |
 
 ## Ports
