@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 type agentRequest struct {
@@ -39,6 +41,9 @@ type agentPlan struct {
 
 // RunRenovationAgent executes a local tool-using renovation workflow via Ollama planning + Go tools.
 func (a *App) RunRenovationAgent(requestJSON string) (string, error) {
+	_, agentSpan := edgeTracer().Start(context.Background(), "nequ3d.edge.renovation_agent")
+	defer agentSpan.End()
+
 	var req agentRequest
 	if err := json.Unmarshal([]byte(requestJSON), &req); err != nil {
 		return "", fmt.Errorf("invalid agent request: %w", err)
@@ -71,6 +76,10 @@ func (a *App) RunRenovationAgent(requestJSON string) (string, error) {
 		emit(agentStep{Tool: "plan", Status: "error", Detail: err.Error()})
 	}
 	tools := normalizeAgentPlan(plannedTools, req, hasLocatePrompt)
+	agentSpan.SetAttributes(
+		attribute.String("nequ3d.agent.model", sanitizeOllamaModel(req.Model)),
+		attribute.StringSlice("nequ3d.agent.tools", tools),
+	)
 	emit(agentStep{Tool: "plan", Status: "ok", Detail: strings.Join(tools, ","), Payload: tools})
 
 	telemetry := strings.TrimSpace(req.Telemetry)
@@ -168,6 +177,38 @@ func (a *App) RunRenovationAgent(requestJSON string) (string, error) {
 		}
 	}
 
+	var faithReport *FaithfulnessReport
+	if advice != "" {
+		isPl := strings.EqualFold(req.Language, "Polish") || strings.EqualFold(req.Language, "pl")
+		rep := evaluateAdviceFaithfulnessInternal(advice, preferStringJSON(telemetry), sanitizeOllamaModel(req.Model), isPl)
+		faithReport = &rep
+		emit(agentStep{
+			Tool:    "verify_faithfulness",
+			Status:  "ok",
+			Detail:  fmt.Sprintf("%d%% (%s)", rep.ScorePct, rep.Verdict),
+			Payload: rep,
+		})
+		if app := application.Get(); app != nil {
+			if rawFaith, err := json.Marshal(rep); err == nil {
+				app.Event.Emit("llmFaithfulness", string(rawFaith))
+			}
+		}
+	}
+
+	agentSubject := filepath.Base(req.AssetPath)
+	if agentSubject == "" || agentSubject == "." {
+		agentSubject = "building_twin"
+	}
+	scorePct := 0
+	if faithReport != nil {
+		scorePct = faithReport.ScorePct
+	}
+	_, _ = publishTwinCloudEvent(context.Background(), "io.nequ3d.twin.agent.completed", agentSubject, map[string]any{
+		"model":             sanitizeOllamaModel(req.Model),
+		"tools":             tools,
+		"faithfulness_pct":  scorePct,
+	})
+
 	result, _ := json.Marshal(map[string]any{
 		"status":            "ok",
 		"tools":             tools,
@@ -175,10 +216,20 @@ func (a *App) RunRenovationAgent(requestJSON string) (string, error) {
 		"manifest_summary":  manifestSummary,
 		"locate":            json.RawMessage(preferRawJSON(locateResult)),
 		"advice":            advice,
+		"faithfulness":      faithReport,
 		"completed_at":      time.Now().UTC().Format(time.RFC3339),
 	})
-	application.Get().Event.Emit("agentDone", string(result))
+	if app := application.Get(); app != nil {
+		app.Event.Emit("agentDone", string(result))
+	}
 	return string(result), nil
+}
+
+func preferStringJSON(s string) string {
+	if json.Valid([]byte(s)) {
+		return s
+	}
+	return "{}"
 }
 
 func normalizeAgentPlan(raw []string, req agentRequest, hasLocatePrompt bool) []string {

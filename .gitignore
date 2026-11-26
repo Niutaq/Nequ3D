@@ -23,6 +23,7 @@ exports/
 # Python Virtual Environment
 processing/venv/
 **/__pycache__/
+**/__marimo__/
 *.pyc
 
 # IDEs

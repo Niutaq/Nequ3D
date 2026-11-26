@@ -14,6 +14,13 @@ from pxr import Usd, UsdGeom, UsdShade, Gf  # type: ignore
 
 from integrity import write_integrity_sidecar
 from omniverse_export import package_omniverse_export
+from otel_setup import (
+    current_trace_id_hex,
+    extract_parent_context,
+    flush_otel,
+    init_core_tracer,
+    start_span,
+)
 from twin_manifest import build_twin_manifest
 from usd_layers import persist_twin_layers
 
@@ -650,18 +657,46 @@ def summarize_ntc_state(telemetry, found_textures):
         )
 
 
-def analyze_usd_stage(file_path, target_bpp="5", target_steps="150"):
+def analyze_usd_stage(file_path, target_bpp="5", target_steps="150", unpack_ms=0.0):
     """
     Analyzes the USD stage to extract mesh geometry and trigger material processing.
     """
+    init_core_tracer("nequ3d-core-worker")
+    parent_ctx = extract_parent_context(
+        {"traceparent": os.environ.get("TRACEPARENT", "")}
+        if os.environ.get("TRACEPARENT")
+        else None
+    )
+    try:
+        with start_span(
+            "nequ3d.core.analyze_usd_stage",
+            {
+                "nequ3d.asset.path": os.path.basename(file_path),
+                "nequ3d.ntc.target_bpp": str(target_bpp),
+                "nequ3d.ntc.target_steps": str(target_steps),
+            },
+            parent_context=parent_ctx,
+        ):
+            return _analyze_usd_stage_inner(file_path, target_bpp, target_steps, unpack_ms)
+    finally:
+        flush_otel()
+
+
+def _analyze_usd_stage_inner(file_path, target_bpp="5", target_steps="150", unpack_ms=0.0):
+    t_open0 = time.perf_counter()
     stage = Usd.Stage.Open(file_path)
     if not stage:
         return json.dumps({"error": f"Failed to open USD stage: {file_path}"})
+
+    stage_timings = {"unpack_ms": round(float(unpack_ms), 1)}
+    trace_hex = current_trace_id_hex()
 
     telemetry = {
         "schema_version": 3,
         "status": "success",
         "source_asset": os.environ.get("NEQU3D_SOURCE_ASSET") or file_path,
+        "trace_id": trace_hex,
+        "stage_timings_ms": stage_timings,
         "total_prim_count": 0,
         "mesh_count": 0,
         "material_count": 0,
@@ -684,121 +719,146 @@ def analyze_usd_stage(file_path, target_bpp="5", target_steps="150"):
 
     found_textures = []
 
-    for prim in stage.Traverse():
-        telemetry["total_prim_count"] += 1
+    with start_span("nequ3d.core.usd_traverse"):
+        for prim in stage.Traverse():
+            telemetry["total_prim_count"] += 1
 
-        if prim.IsA(UsdGeom.Mesh):
-            telemetry["mesh_count"] += 1
-            mesh = UsdGeom.Mesh(prim)
-            telemetry["prim_names"].append(f"Mesh: {prim.GetName()}")
+            if prim.IsA(UsdGeom.Mesh):
+                telemetry["mesh_count"] += 1
+                mesh = UsdGeom.Mesh(prim)
+                telemetry["prim_names"].append(f"Mesh: {prim.GetName()}")
 
-            counts = mesh.GetFaceVertexCountsAttr().Get()
-            if counts:
-                telemetry["total_faces"] += len(counts)
+                counts = mesh.GetFaceVertexCountsAttr().Get()
+                if counts:
+                    telemetry["total_faces"] += len(counts)
 
-            points = mesh.GetPointsAttr().Get()
-            if points:
-                telemetry["total_vertices"] += len(points)
+                points = mesh.GetPointsAttr().Get()
+                if points:
+                    telemetry["total_vertices"] += len(points)
 
-        if prim.IsA(UsdShade.Material):
-            telemetry["material_count"] += 1
+            if prim.IsA(UsdShade.Material):
+                telemetry["material_count"] += 1
 
-        if prim.IsA(UsdShade.Shader):
-            shader = UsdShade.Shader(prim)
-            if shader.GetIdAttr().Get() == "UsdUVTexture":
-                file_attr = shader.GetInput("file")
-                if file_attr:
-                    tex_path = str(file_attr.Get())
-                    if tex_path:
-                        found_textures.append(tex_path)
-                        telemetry["texture_count"] += 1
+            if prim.IsA(UsdShade.Shader):
+                shader = UsdShade.Shader(prim)
+                if shader.GetIdAttr().Get() == "UsdUVTexture":
+                    file_attr = shader.GetInput("file")
+                    if file_attr:
+                        tex_path = str(file_attr.Get())
+                        if tex_path:
+                            found_textures.append(tex_path)
+                            telemetry["texture_count"] += 1
+    stage_timings["usd_traverse_ms"] = round((time.perf_counter() - t_open0) * 1000.0, 1)
 
     if found_textures:
         print(
             f"[Core Python] Initialization: Physical NTC compression for {len(found_textures)} textures..."
         )
-        telemetry["ntc_compressed_files"] = run_ntc_compression(
-            file_path, found_textures, target_bpp, target_steps
-        )
+        t_ntc0 = time.perf_counter()
+        with start_span(
+            "nequ3d.core.ntc_compress",
+            {
+                "nequ3d.texture_count": len(found_textures),
+                "nequ3d.ntc.bpp": str(target_bpp),
+                "nequ3d.ntc.steps": str(target_steps),
+            },
+        ):
+            telemetry["ntc_compressed_files"] = run_ntc_compression(
+                file_path, found_textures, target_bpp, target_steps
+            )
+        stage_timings["ntc_ms"] = round((time.perf_counter() - t_ntc0) * 1000.0, 1)
 
     summarize_ntc_state(telemetry, found_textures)
 
     print("[Core Python] Action: Generating Proxy Mesh (GLB) for Web Viewer...")
-    proxy_path = generate_proxy_mesh(
-        file_path, suffix="_proxy.glb", use_reconstructed=False
-    )
+    t_glb0 = time.perf_counter()
+    with start_span("nequ3d.core.generate_proxy_glb"):
+        proxy_path = generate_proxy_mesh(
+            file_path, suffix="_proxy.glb", use_reconstructed=False
+        )
+    stage_timings["proxy_glb_ms"] = round((time.perf_counter() - t_glb0) * 1000.0, 1)
+
     if proxy_path:
         telemetry["proxy_glb_path"] = proxy_path
         telemetry["proxy_scaled_to_meters"] = True
-        splat_path = generate_gaussian_splat(proxy_path)
+        t_splat0 = time.perf_counter()
+        with start_span("nequ3d.core.generate_3dgs_splat"):
+            splat_path = generate_gaussian_splat(proxy_path)
+        stage_timings["splat_3dgs_ms"] = round((time.perf_counter() - t_splat0) * 1000.0, 1)
         if splat_path:
             telemetry["environment_splat_path"] = splat_path
 
     if telemetry["has_ntc_quality"]:
         print("[Core Python] Action: Generating Proxy NTC Mesh (GLB)...")
-        proxy_ntc_path = generate_proxy_mesh(
-            file_path, suffix="_proxy_ntc.glb", use_reconstructed=True
-        )
+        with start_span("nequ3d.core.generate_proxy_ntc_glb"):
+            proxy_ntc_path = generate_proxy_mesh(
+                file_path, suffix="_proxy_ntc.glb", use_reconstructed=True
+            )
         if proxy_ntc_path:
             telemetry["proxy_ntc_glb_path"] = proxy_ntc_path
 
     print("[Core Python] Action: Building twin_manifest + OpenUSD annotation layers...")
     source_asset = telemetry.get("source_asset") or file_path
-    try:
-        manifest = build_twin_manifest(
-            file_path, telemetry=telemetry, source_asset=source_asset
-        )
-        layer_paths = persist_twin_layers(file_path, manifest)
-        telemetry["twin_manifest"] = {
-            "zone_count": len(manifest.get("zones") or []),
-            "prim_count": len(manifest.get("prims") or []),
-            "up_axis": manifest.get("up_axis"),
-            "meters_per_unit": manifest.get("meters_per_unit"),
-            "integrity": manifest.get("integrity"),
-        }
-        telemetry["twin_manifest_path"] = layer_paths.get("twin_manifest_path", "")
-        telemetry["annotations_usda"] = layer_paths.get("annotations_usda", "")
-        telemetry["composed_usda"] = layer_paths.get("composed_usda", "")
-        telemetry["twin_dir"] = layer_paths.get("twin_dir", "")
-        telemetry["zones"] = [
-            {
-                "id": z.get("id"),
-                "label": z.get("label"),
-                "status": z.get("status"),
-                "prim_count": len(z.get("prim_paths") or []),
-                "bbox": z.get("bbox"),
+    t_twin0 = time.perf_counter()
+    with start_span("nequ3d.core.package_twin_simready"):
+        try:
+            manifest = build_twin_manifest(
+                file_path, telemetry=telemetry, source_asset=source_asset
+            )
+            layer_paths = persist_twin_layers(file_path, manifest)
+            telemetry["twin_manifest"] = {
+                "zone_count": len(manifest.get("zones") or []),
+                "prim_count": len(manifest.get("prims") or []),
+                "up_axis": manifest.get("up_axis"),
+                "meters_per_unit": manifest.get("meters_per_unit"),
+                "integrity": manifest.get("integrity"),
             }
-            for z in (manifest.get("zones") or [])
-        ]
+            telemetry["twin_manifest_path"] = layer_paths.get("twin_manifest_path", "")
+            telemetry["annotations_usda"] = layer_paths.get("annotations_usda", "")
+            telemetry["composed_usda"] = layer_paths.get("composed_usda", "")
+            telemetry["twin_dir"] = layer_paths.get("twin_dir", "")
+            telemetry["zones"] = [
+                {
+                    "id": z.get("id"),
+                    "label": z.get("label"),
+                    "status": z.get("status"),
+                    "prim_count": len(z.get("prim_paths") or []),
+                    "bbox": z.get("bbox"),
+                }
+                for z in (manifest.get("zones") or [])
+            ]
 
-        export_root = os.environ.get(
-            "NEQU3D_OMNIVERSE_EXPORT",
-            os.path.join(os.path.dirname(file_path), "..", "exports", "omniverse"),
-        )
-        export_root = os.path.abspath(export_root)
-        asset_name = os.path.splitext(os.path.basename(source_asset))[0]
-        export_info = package_omniverse_export(
-            layer_paths["twin_dir"],
-            export_root,
-            asset_name,
-            manifest,
-            extra_files=[
-                p
-                for p in (
-                    telemetry.get("proxy_glb_path"),
-                    telemetry.get("proxy_ntc_glb_path"),
-                )
-                if p
-            ],
-        )
-        telemetry["omniverse_export_dir"] = export_info.get("export_dir", "")
-        telemetry["simready_ready"] = bool(
-            (export_info.get("checklist") or {}).get("ready_for_kit_import")
-        )
-        telemetry["simready_checklist"] = export_info.get("checklist")
-    except Exception as e:
-        print(f"[Core Python] Warning: twin/Omniverse packaging failed: {e}")
-        telemetry["twin_error"] = str(e)
+            export_root = os.environ.get(
+                "NEQU3D_OMNIVERSE_EXPORT",
+                os.path.join(os.path.dirname(file_path), "..", "exports", "omniverse"),
+            )
+            export_root = os.path.abspath(export_root)
+            asset_name = os.path.splitext(os.path.basename(source_asset))[0]
+            export_info = package_omniverse_export(
+                layer_paths["twin_dir"],
+                export_root,
+                asset_name,
+                manifest,
+                extra_files=[
+                    p
+                    for p in (
+                        telemetry.get("proxy_glb_path"),
+                        telemetry.get("proxy_ntc_glb_path"),
+                    )
+                    if p
+                ],
+                telemetry=telemetry,
+            )
+            telemetry["omniverse_export_dir"] = export_info.get("export_dir", "")
+            telemetry["simready_ready"] = bool(
+                (export_info.get("checklist") or {}).get("ready_for_kit_import")
+            )
+            telemetry["simready_checklist"] = export_info.get("checklist")
+            telemetry["provenance"] = export_info.get("provenance")
+        except Exception as e:
+            print(f"[Core Python] Warning: twin/Omniverse packaging failed: {e}")
+            telemetry["twin_error"] = str(e)
+    stage_timings["twin_simready_ms"] = round((time.perf_counter() - t_twin0) * 1000.0, 1)
 
     print("Telemetry: " + json.dumps(telemetry))
 
@@ -810,7 +870,9 @@ if __name__ == "__main__":
         steps_target = sys.argv[3] if len(sys.argv) > 3 else "150"
 
         # Automatic USDZ archive extraction
+        t_unpack0 = time.perf_counter()
         working_path = unpack_usdz(raw_path)
+        unpack_elapsed_ms = (time.perf_counter() - t_unpack0) * 1000.0
 
         # Integrity sidecar for Reality Scan / source asset (NetSecOps)
         try:
@@ -823,7 +885,7 @@ if __name__ == "__main__":
         # Stash source for twin_manifest
         # analyze_usd_stage reads telemetry source via optional env
         os.environ["NEQU3D_SOURCE_ASSET"] = raw_path
-        analyze_usd_stage(working_path, bpp_target, steps_target)
+        analyze_usd_stage(working_path, bpp_target, steps_target, unpack_ms=unpack_elapsed_ms)
     else:
         print("[ERROR] Missing input file path")
         sys.exit(1)

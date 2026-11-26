@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -148,10 +149,22 @@ func (a *App) SaveTwinAnnotations(payloadJSON string) (string, error) {
 	}
 
 	digest, _ := writeIntegritySidecar(manifestPath, map[string]any{"kind": "twin_manifest"})
+	intotoPath, _, _ := generateEdgeProvenance(payload.TwinDir, "")
+	assetSubject := filepath.Base(payload.TwinDir)
+	if src, ok := manifest["source_asset"].(string); ok && src != "" {
+		assetSubject = filepath.Base(src)
+	}
+	_, _ = publishTwinCloudEvent(context.Background(), "io.nequ3d.twin.annotations.saved", assetSubject, map[string]any{
+		"zone_count":        len(asSlice(manifest["zones"])),
+		"measurement_count": len(asSlice(manifest["measurements"])),
+		"pin_count":         len(asSlice(manifest["annotations"])),
+		"manifest_sha256":   digest,
+	})
 	result, _ := json.Marshal(map[string]any{
 		"status":             "saved",
 		"twin_manifest_path": manifestPath,
 		"sha256":             digest,
+		"intoto_path":        intotoPath,
 	})
 	return string(result), nil
 }

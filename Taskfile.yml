@@ -93,6 +93,12 @@ tasks:
       - echo "Open http://localhost:9090 in your browser."
       - kubectl port-forward -n monitoring svc/kube-prometheus-stack-prometheus 9090:9090
 
+  jaeger-ui:
+    desc: Port-forwards Jaeger UI (:16686) and OTLP HTTP collector (:4318) (CTRL+C to stop)
+    cmds:
+      - echo "Open http://localhost:16686 in your browser (OTLP HTTP on :4318)."
+      - kubectl port-forward -n monitoring svc/jaeger 16686:16686 4318:4318
+
   minio-console:
     desc: Port-forwards the MinIO Web Console to localhost:9001 (CTRL+C to stop)
     cmds:
@@ -100,13 +106,56 @@ tasks:
       - kubectl port-forward svc/minio -n minio 9001:9001
 
   run-all:
-    desc: One-shot Windows session — MinIO, Core GPU, Wails, Argo/Grafana/Prometheus UIs (use -NoStack to skip CNCF UIs)
+    desc: One-shot Windows session — MinIO, Core GPU, Wails, Argo/Grafana/Prometheus/Jaeger UIs (use -NoStack to skip CNCF UIs)
     platforms: [windows]
     cmds:
       - pwsh -NoProfile -File ./scripts/run-all.ps1 -WithStack
 
+  run-all-build:
+    desc: Rebuilds nequ3d-core:v4 image (-BuildCore) and starts full Windows session with CNCF UIs
+    platforms: [windows]
+    cmds:
+      - pwsh -NoProfile -File ./scripts/run-all.ps1 -WithStack -BuildCore
+
   run-all-lite:
-    desc: Same as run-all but without Argo/Grafana/Prometheus port-forwards
+    desc: Same as run-all but without Argo/Grafana/Prometheus/Jaeger port-forwards
     platforms: [windows]
     cmds:
       - pwsh -NoProfile -File ./scripts/run-all.ps1 -NoStack
+
+  run-all-lite-build:
+    desc: Rebuilds nequ3d-core:v4 image (-BuildCore) and starts lite Windows session (-NoStack)
+    platforms: [windows]
+    cmds:
+      - pwsh -NoProfile -File ./scripts/run-all.ps1 -NoStack -BuildCore
+
+  benchmark-sweep:
+    desc: Runs multi-BPP NVIDIA RTX NTC benchmark sweep (2, 4, 5, 6 BPP) for the thesis
+    platforms: [windows]
+    cmds:
+      - pwsh -NoProfile -File ./experiments/run-ntc-benchmark.ps1 -BppList "2,4,5,6" -StepsList "150,450"
+
+  notebook:
+    desc: Opens the reactive marimo thesis benchmark & LaTeX table notebook (auto-installs marimo into data/marimo-venv if missing)
+    cmds:
+      - cmd: pwsh -NoProfile -File ./scripts/run-notebook.ps1 -Mode edit
+        platforms: [windows]
+      - cmd: python3 -m marimo edit ./experiments/ntc_thesis_notebook.py
+        platforms: [linux, darwin]
+
+  notebook-view:
+    desc: Opens the marimo thesis benchmark notebook in read-only presentation app mode
+    platforms: [windows]
+    cmds:
+      - pwsh -NoProfile -File ./scripts/run-notebook.ps1 -Mode run
+
+  oras-dryrun:
+    desc: Validates OCI / ORAS artifact layers and in-toto provenance bundle (pass TWIN_DIR=...)
+    platforms: [windows]
+    cmds:
+      - pwsh -NoProfile -File ./scripts/push-oras-twin.ps1 -TwinDir "{{.TWIN_DIR}}" -DryRun
+
+  security-audit:
+    desc: Audits Helm/K8s manifests against Kyverno policies, validates Tetragon eBPF & KEDA, and builds CycloneDX SBOM
+    cmds:
+      - python ./scripts/verify-netsecops.py

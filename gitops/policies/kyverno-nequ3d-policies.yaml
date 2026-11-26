@@ -1,0 +1,70 @@
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: nequ3d-workload-baseline
+  annotations:
+    policies.kyverno.io/title: Nequ3D Workload Pod Security Baseline
+    policies.kyverno.io/category: Pod Security Standards (Restricted-Lite)
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/description: >-
+      Enforces non-privileged execution, dropped Linux capabilities, no privilege escalation,
+      pinned container image tags, and explicit resource bounds across Nequ3D workloads.
+spec:
+  validationFailureAction: Enforce
+  background: true
+  rules:
+    - name: disallow-privileged-and-escalation
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+      validate:
+        message: "Containers must set securityContext.allowPrivilegeEscalation=false and must not run privileged."
+        pattern:
+          spec:
+            containers:
+              - securityContext:
+                  allowPrivilegeEscalation: false
+                  =(privileged): false
+    - name: require-drop-all-capabilities
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+      validate:
+        message: "All containers must drop ALL Linux capabilities."
+        pattern:
+          spec:
+            containers:
+              - securityContext:
+                  capabilities:
+                    drop:
+                      - ALL
+    - name: disallow-latest-image-tag
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+      validate:
+        message: "Mutable ':latest' or untagged container images are prohibited; pin an immutable tag or digest."
+        pattern:
+          spec:
+            containers:
+              - image: "!*:latest & *:*"
+    - name: require-memory-limits
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+      validate:
+        message: "Every container must declare resources.limits.memory to prevent host/VRAM OOM cascades."
+        pattern:
+          spec:
+            containers:
+              - resources:
+                  limits:
+                    memory: "?*"

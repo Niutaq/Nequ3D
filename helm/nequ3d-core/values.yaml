@@ -17,27 +17,57 @@ serviceAccount:
   create: true
   annotations: {}
   name: ""
+  automountServiceAccountToken: false
 
 podAnnotations: {}
 
-podSecurityContext: {}
-  # fsGroup: 2000
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+  seccompProfile:
+    type: RuntimeDefault
 
-securityContext: {}
-  # capabilities:
-  #   drop:
-  #   - ALL
-  # readOnlyRootFilesystem: true
-  # runAsNonRoot: true
-  # runAsUser: 1000
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: false
+  capabilities:
+    drop:
+      - ALL
 
 service:
   type: ClusterIP
-  port: 50051 # Assuming gRPC port
+  port: 50051
 
 resources:
-  limits: {}
+  requests:
+    cpu: 500m
+    memory: 2Gi
+  limits:
+    cpu: "4"
+    memory: 12Gi
+    # Uncomment on GPU-enabled Kubernetes nodes (NVIDIA Device Plugin):
     # nvidia.com/gpu: 1
+
+# CNCF KEDA event-driven autoscaling (scales GPU Core pods 0 -> N on gRPC load or NATS JetStream queue)
+keda:
+  enabled: false
+  pollingInterval: 10
+  cooldownPeriod: 120
+  minReplicaCount: 0
+  maxReplicaCount: 4
+  prometheus:
+    serverAddress: "http://kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090"
+    query: "sum(nequ3d_active_grpc_requests)"
+    threshold: "1"
+  natsJetStream:
+    enabled: false
+    natsServerMonitoringEndpoint: "nats.nequ3d.svc.cluster.local:8222"
+    account: "$G"
+    stream: "NEQU3D_TWIN_EVENTS"
+    consumer: "nequ3d-core-workers"
+    lagThreshold: "2"
 
 nodeSelector: {}
 

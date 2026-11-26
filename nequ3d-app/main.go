@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"embed"
 	"log"
 	"net"
@@ -36,6 +37,13 @@ func startLocalAssetServer(urlCh chan<- string) {
 	}
 }
 func main() {
+	shutdownOTel := initOpenTelemetry()
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = shutdownOTel(ctx)
+	}()
+
 	urlCh := make(chan string, 1)
 	go startLocalAssetServer(urlCh)
 
@@ -62,15 +70,23 @@ func main() {
 		URL:              "/",
 	})
 
+	if err := StartEmbeddedNATS(app); err != nil {
+		log.Printf("[Nequ3D NATS Warning]: %v", err)
+	}
+	defer StopEmbeddedNATS()
+
 	startGPUStatsTicker(app)
 
-	// Publish the actual local-file server URL once it is up so the frontend
-	// can build preview links from the real (dynamically assigned) port.
+	// Publish the local-file server URL on startup and whenever the frontend requests it,
+	// avoiding an infinite 1s IPC broadcast loop.
 	go func() {
 		if url, ok := <-urlCh; ok {
-			for {
+			app.Event.On("requestLocalServerUrl", func(_ *application.CustomEvent) {
 				app.Event.Emit("localServerUrl", url)
-				time.Sleep(1 * time.Second)
+			})
+			for _, delay := range []time.Duration{250 * time.Millisecond, 900 * time.Millisecond, 2200 * time.Millisecond} {
+				time.Sleep(delay)
+				app.Event.Emit("localServerUrl", url)
 			}
 		}
 	}()

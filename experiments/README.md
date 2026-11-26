@@ -7,7 +7,8 @@ Reproducible NTC / twin pipeline runs against Reality Scan assets.
 ```text
 experiments/
   README.md
-  run-ntc-benchmark.ps1
+  run-ntc-benchmark.ps1    # Single or multi-BPP / multi-step sweep harness
+  ntc_thesis_notebook.py   # Reactive marimo notebook (Rate-Distortion + LaTeX booktabs)
   results/                 # gitignored numeric runs (CSV/JSON)
   fixtures.example.json    # example asset list
 ```
@@ -20,6 +21,16 @@ experiments/
 
 ```powershell
 pwsh -NoProfile -File ./experiments/run-ntc-benchmark.ps1
+# or full multi-BPP thesis sweep (2, 4, 5, 6 BPP x 150, 450 steps):
+task benchmark-sweep
+```
+
+4. Inspect interactive Rate–Distortion curves & copy ready-made LaTeX `booktabs` tables in **marimo**:
+
+```powershell
+pip install marimo
+task notebook
+# or: python -m marimo edit ./experiments/ntc_thesis_notebook.py
 ```
 
 Optional:

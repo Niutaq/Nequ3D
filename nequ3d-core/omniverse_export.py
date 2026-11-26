@@ -8,6 +8,8 @@ import shutil
 from datetime import datetime, timezone
 from typing import Any
 
+from provenance_intoto import generate_twin_provenance
+
 
 def build_simready_checklist(manifest: dict[str, Any]) -> dict[str, Any]:
     """Lightweight SimReady-inspired readiness checklist for building scans."""
@@ -99,6 +101,7 @@ def package_omniverse_export(
     asset_name: str,
     manifest: dict[str, Any],
     extra_files: list[str] | None = None,
+    telemetry: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """
     Copy twin layers + checklist into exports/omniverse/<asset>/.
@@ -139,8 +142,17 @@ def package_omniverse_export(
             "4. Nucleus is not required for this research workflow.\n"
         )
 
+    all_files = copied + [checklist_path, readme_path]
+    provenance = generate_twin_provenance(
+        dest,
+        all_files,
+        manifest,
+        telemetry=telemetry,
+    )
+
     return {
         "export_dir": dest,
-        "files": copied + [checklist_path, readme_path],
+        "files": all_files + [provenance["intoto_path"], provenance["oras_manifest_path"]],
         "checklist": checklist,
+        "provenance": provenance,
     }

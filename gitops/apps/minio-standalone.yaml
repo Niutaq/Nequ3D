@@ -13,6 +13,13 @@ spec:
       labels:
         app: minio
     spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        fsGroup: 1001
+        seccompProfile:
+          type: RuntimeDefault
       containers:
       - name: minio
         # Official minio/minio on Docker Hub / quay is no longer anonymously pullable (AIStor).
@@ -20,6 +27,11 @@ spec:
         image: bitnamilegacy/minio:2025.4.22-debian-12-r0
         imagePullPolicy: IfNotPresent
         # Bitnami entrypoint owns process start; do not override with `minio server ...`.
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+              - ALL
         env:
         - name: MINIO_ROOT_USER
           valueFrom:
@@ -52,6 +64,13 @@ spec:
             port: 9000
           initialDelaySeconds: 10
           periodSeconds: 10
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: "1"
+            memory: 1Gi
         volumeMounts:
         - name: data
           mountPath: /bitnami/minio/data

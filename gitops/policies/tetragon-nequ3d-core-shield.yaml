@@ -1,0 +1,51 @@
+apiVersion: cilium.io/v1alpha1
+kind: TracingPolicyNamespaced
+metadata:
+  name: nequ3d-core-runtime-shield
+  namespace: default
+  annotations:
+    nequ3d.io/security-layer: "ebpf-runtime-enforcement"
+    nequ3d.io/evolution-note: >-
+      Tetragon eBPF TracingPolicy protecting OpenUSD / RTX NTC parsing against arbitrary shell
+      execution and credential reads; direct CNCF foundation of OpenAI/Cisco Shirudo OCI eBPF shields.
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: nequ3d-core
+  kprobes:
+    # 1. Block interactive shells & network downloaders if a crafted USDZ/GLTF triggers RCE
+    - call: "sys_execve"
+      syscall: true
+      args:
+        - index: 0
+          type: "string"
+      selectors:
+        - matchArgs:
+            - index: 0
+              operator: "In"
+              values:
+                - "/bin/sh"
+                - "/bin/bash"
+                - "/usr/bin/sh"
+                - "/usr/bin/bash"
+                - "/usr/bin/curl"
+                - "/usr/bin/wget"
+                - "/bin/nc"
+                - "/usr/bin/nc"
+          matchActions:
+            - action: Sigkill
+    # 2. Block reads of sensitive host/Kubernetes credentials from inside the 3D worker
+    - call: "security_file_open"
+      syscall: false
+      args:
+        - index: 0
+          type: "file"
+      selectors:
+        - matchArgs:
+            - index: 0
+              operator: "Prefix"
+              values:
+                - "/etc/shadow"
+                - "/var/run/secrets/kubernetes.io/serviceaccount"
+          matchActions:
+            - action: Sigkill

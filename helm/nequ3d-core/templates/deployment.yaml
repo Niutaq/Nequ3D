@@ -4,21 +4,39 @@ metadata:
   name: {{ include "nequ3d-core.fullname" . }}
   labels:
     app: {{ include "nequ3d-core.fullname" . }}
+    app.kubernetes.io/name: nequ3d-core
+    app.kubernetes.io/part-of: nequ3d
 spec:
+  {{- if not .Values.keda.enabled }}
   replicas: {{ .Values.replicaCount }}
+  {{- end }}
   selector:
     matchLabels:
       app: {{ include "nequ3d-core.fullname" . }}
   template:
     metadata:
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       labels:
         app: {{ include "nequ3d-core.fullname" . }}
+        app.kubernetes.io/name: nequ3d-core
     spec:
+      automountServiceAccountToken: {{ .Values.serviceAccount.automountServiceAccountToken | default false }}
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: {{ .Chart.Name }}
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           command: ["python3", "-u", "rpc_server.py"]
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           env:
             - name: MINIO_ACCESS_KEY
               valueFrom:
@@ -32,10 +50,14 @@ spec:
                   key: rootPassword
             - name: MINIO_ENDPOINT
               value: "http://minio.minio.svc.cluster.local:9000"
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: "http://jaeger.monitoring.svc.cluster.local:4318"
             - name: NVIDIA_VISIBLE_DEVICES
               value: "all"
             - name: NVIDIA_DRIVER_CAPABILITIES
               value: "all"
+            - name: NEQU3D_WORKSPACE
+              value: "/tmp/workspace"
           ports:
             - name: grpc
               containerPort: 50051
@@ -43,5 +65,23 @@ spec:
             - name: metrics
               containerPort: 8001
               protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /metrics
+              port: 8001
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /metrics
+              port: 8001
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          volumeMounts:
+            - name: workspace
+              mountPath: /tmp/workspace
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: workspace
+          emptyDir: {}

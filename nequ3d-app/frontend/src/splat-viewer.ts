@@ -1,11 +1,9 @@
 /** Lazy Gaussian splat viewer & deterministic anisotropic 2DGS surfel converter for 3DGS / Hybrid tabs. */
 import { $scene } from "@google/model-viewer/lib/model-viewer-base.js";
 import {
-  Box3,
   Color,
   Matrix4,
   Quaternion as ThreeQuaternion,
-  Vector2,
   Vector3 as ThreeVector3,
   type BufferGeometry,
   type Material,
@@ -13,6 +11,13 @@ import {
   type Object3D,
   type PerspectiveCamera,
 } from "three";
+import {
+  buildSplatFromMeshes,
+  type SplatWorkerRequest,
+  type SplatWorkerResponse,
+  type WorkerMeshPayload,
+  type WorkerTextureSampler,
+} from "./splat-converter.worker";
 
 export type SplatSource =
   | { kind: "url"; url: string; ext?: string }
@@ -52,6 +57,7 @@ let activeRenderer: { dispose?: () => void } | null = null;
 let activeResetFn: (() => void) | null = null;
 let activeTopViewFn: ((enabled: boolean) => void) | null = null;
 let activeKeyGuard: ((e: KeyboardEvent) => void) | null = null;
+let activeCleanupHook: (() => void) | null = null;
 
 type TextureSampler = {
   data: Uint8ClampedArray;
@@ -96,8 +102,8 @@ function buildTextureSampler(material: Material | undefined): {
   // In glTF / Three.js GLTFLoader, texture.flipY is false (v=0 is top of image).
   const flipY = mat?.map?.flipY === true;
 
-  // High-res 2048px cap preserves sharp architectural & furniture details.
-  const scale = Math.min(1, 2048 / Math.max(rawW, rawH));
+  // 1024px cap preserves crisp architectural details at 4x faster pixel readback & memory footprint.
+  const scale = Math.min(1, 1024 / Math.max(rawW, rawH));
   const width = Math.max(1, Math.round(rawW * scale));
   const height = Math.max(1, Math.round(rawH * scale));
   try {
@@ -121,6 +127,9 @@ function getModelRoot(modelScene: any): Object3D | null {
     | Array<{ scene?: Object3D }>
     | undefined;
   if (Array.isArray(gltfs) && gltfs[0]?.scene) return gltfs[0].scene;
+  if (modelScene && ("currentGLTF" in modelScene || "currentGLTFs" in modelScene)) {
+    return null;
+  }
   return modelScene as Object3D | null;
 }
 
@@ -145,11 +154,39 @@ function encodeByte(v: number): number {
   return Math.max(0, Math.min(255, Math.round(v * 128 + 128)));
 }
 
+function extractFloat32(attr: any): Float32Array | null {
+  if (!attr || !attr.count) return null;
+  const arr = attr.array;
+  if (arr instanceof Float32Array && !attr.isInterleavedBufferAttribute) {
+    return arr.slice();
+  }
+  const itemSize = attr.itemSize || 3;
+  const out = new Float32Array(attr.count * itemSize);
+  for (let i = 0; i < attr.count; i++) {
+    const o = i * itemSize;
+    out[o] = attr.getX(i);
+    if (itemSize > 1) out[o + 1] = attr.getY(i);
+    if (itemSize > 2) out[o + 2] = attr.getZ(i);
+    if (itemSize > 3) out[o + 3] = attr.getW(i);
+  }
+  return out;
+}
+
+function extractIndices(index: any): Uint32Array | null {
+  if (!index || !index.count) return null;
+  const arr = index.array;
+  if (arr instanceof Uint32Array) return arr.slice();
+  if (arr instanceof Uint16Array || arr instanceof Uint8Array) {
+    return new Uint32Array(arr);
+  }
+  const out = new Uint32Array(index.count);
+  for (let i = 0; i < index.count; i++) out[i] = index.getX(i);
+  return out;
+}
+
 /**
  * Deterministic anisotropic triangle-fitted 2D Gaussian surfel converter.
- * Instead of random Monte Carlo sampling (which causes Poisson clumping and black holes),
- * every triangle (or deterministic stride / barycentric subdivision on large faces) emits
- * a flat elliptical surfel aligned to its exact tangent/bitangent/normal frame and extents.
+ * Offloads heavy 950k-surfel math to a dedicated Web Worker so UI clicks stay <10ms INP.
  */
 export async function convertViewerMeshToSplatBuffer(
   viewer: HTMLElement | null,
@@ -170,22 +207,19 @@ export async function convertViewerMeshToSplatBuffer(
   root.updateMatrixWorld(true);
 
   const invRoot = root.matrixWorld.clone().invert();
-
-  type MeshEntry = {
-    geo: BufferGeometry;
-    localMatrix: Matrix4;
-    sampler: TextureSampler | null;
-    fallbackColor: [number, number, number];
-    triCount: number;
+  const samplerCache = new WeakMap<
+    object,
+    { sampler: WorkerTextureSampler | null; fallbackColor: [number, number, number] }
+  >();
+  const meshes: WorkerMeshPayload[] = [];
+  const transferables: Transferable[] = [];
+  const transferredBuffers = new Set<ArrayBuffer>();
+  const pushTransfer = (buf: ArrayBufferLike | undefined) => {
+    if (buf instanceof ArrayBuffer && !transferredBuffers.has(buf)) {
+      transferredBuffers.add(buf);
+      transferables.push(buf);
+    }
   };
-
-  const entries: MeshEntry[] = [];
-  const bbox = new Box3();
-  const v0 = new ThreeVector3();
-  const v1 = new ThreeVector3();
-  const v2 = new ThreeVector3();
-
-  let totalTris = 0;
 
   root.traverse((obj) => {
     const mesh = obj as Mesh;
@@ -206,323 +240,85 @@ export async function convertViewerMeshToSplatBuffer(
       : Math.floor(posAttr.count / 3);
     if (triCount <= 0) return;
 
-    const localMatrix = invRoot.clone().multiply(mesh.matrixWorld);
-    // Compute bbox quickly over unique vertices
-    for (let i = 0; i < posAttr.count; i++) {
-      v0.fromBufferAttribute(posAttr, i).applyMatrix4(localMatrix);
-      bbox.expandByPoint(v0);
-    }
+    const positions = extractFloat32(posAttr);
+    if (!positions) return;
+    const indices = extractIndices(index);
+    const uvs = geo.attributes.uv ? extractFloat32(geo.attributes.uv) : null;
+    const colors = geo.attributes.color
+      ? extractFloat32(geo.attributes.color)
+      : null;
 
-    const mat = Array.isArray(mesh.material) ? mesh.material[0] : mesh.material;
-    const { sampler, fallbackColor } = buildTextureSampler(mat);
-    entries.push({ geo, localMatrix, sampler, fallbackColor, triCount });
-    totalTris += triCount;
+    const localMatrix = new Float32Array(
+      invRoot.clone().multiply(mesh.matrixWorld).elements,
+    );
+    const mat = (
+      Array.isArray(mesh.material) ? mesh.material[0] : mesh.material
+    ) as Material | undefined;
+
+    let cached = mat ? samplerCache.get(mat) : undefined;
+    if (!cached) {
+      cached = buildTextureSampler(mat);
+      if (mat) samplerCache.set(mat, cached);
+    }
+    // Clone sampler buffer per worker transfer if reused across multiple meshes
+    const samplerCopy: WorkerTextureSampler | null = cached.sampler
+      ? {
+          data: new Uint8ClampedArray(cached.sampler.data),
+          width: cached.sampler.width,
+          height: cached.sampler.height,
+          flipY: cached.sampler.flipY,
+        }
+      : null;
+
+    pushTransfer(positions.buffer);
+    if (indices) pushTransfer(indices.buffer);
+    if (uvs) pushTransfer(uvs.buffer);
+    if (colors) pushTransfer(colors.buffer);
+    pushTransfer(localMatrix.buffer);
+    if (samplerCopy) pushTransfer(samplerCopy.data.buffer);
+
+    meshes.push({
+      positions,
+      indices,
+      uvs,
+      colors,
+      colorItemSize: geo.attributes.color?.itemSize || 3,
+      localMatrix,
+      sampler: samplerCopy,
+      fallbackColor: cached.fallbackColor,
+      triCount,
+    });
   });
 
-  if (!entries.length || totalTris <= 0) return null;
+  if (!meshes.length) return null;
+  const payload: SplatWorkerRequest = { meshes, maxSplats };
 
-  const center = bbox.getCenter(new ThreeVector3());
-  const size = bbox.getSize(new ThreeVector3());
-  const maxDim = Math.max(size.x, size.y, size.z, 0.1);
-
-  const budget = Math.max(50000, Math.min(maxSplats, 980000));
-  const stride = totalTris > budget ? totalTris / budget : 1;
-  // Tight overlap seals every triangle seam cleanly without over-blurring edges
-  const coverageBoost = stride > 1 ? Math.sqrt(stride) * 1.25 : 1.15;
-  // On low-poly models, subdivide large triangles deterministically for crisp texture detail
-  const allowSubdiv = stride === 1 && totalTris < budget * 0.45;
-  const targetEdge = maxDim / 220;
-  const minS = maxDim * 0.0007;
-  const maxS = maxDim * 0.035;
-
-  // Allocate buffer up to budget
-  const buffer = new ArrayBuffer(budget * 32);
-  const f32 = new Float32Array(buffer);
-  const u8 = new Uint8Array(buffer);
-
-  const e01 = new ThreeVector3();
-  const e12 = new ThreeVector3();
-  const e20 = new ThreeVector3();
-  const t1 = new ThreeVector3();
-  const t2 = new ThreeVector3();
-  const norm = new ThreeVector3();
-  const t1Cv = new ThreeVector3();
-  const t2Cv = new ThreeVector3();
-  const nCv = new ThreeVector3();
-  const basisMat = new Matrix4();
-  const surfQuat = new ThreeQuaternion();
-  const rel = new ThreeVector3();
-  const uv0 = new Vector2();
-  const uv1 = new Vector2();
-  const uv2 = new Vector2();
-
-  let writeIdx = 0;
-
-  const sampleColorAt = (
-    sampler: TextureSampler | null,
-    uvAttr: any,
-    colorAttr: any,
-    fallbackColor: [number, number, number],
-    i0: number,
-    i1: number,
-    i2: number,
-    r0: number,
-    r1: number,
-    r2: number,
-  ): [number, number, number] => {
-    if (sampler && uvAttr) {
-      uv0.set(uvAttr.getX(i0), uvAttr.getY(i0));
-      uv1.set(uvAttr.getX(i1), uvAttr.getY(i1));
-      uv2.set(uvAttr.getX(i2), uvAttr.getY(i2));
-      const u = (((uv0.x * r0 + uv1.x * r1 + uv2.x * r2) % 1) + 1) % 1;
-      const v = (((uv0.y * r0 + uv1.y * r1 + uv2.y * r2) % 1) + 1) % 1;
-      const vy = sampler.flipY ? 1 - v : v;
-      const tx = Math.min(sampler.width - 1, Math.floor(u * sampler.width));
-      const ty = Math.min(sampler.height - 1, Math.floor(vy * sampler.height));
-      const pOff = (ty * sampler.width + tx) * 4;
-      return [sampler.data[pOff], sampler.data[pOff + 1], sampler.data[pOff + 2]];
+  if (typeof Worker !== "undefined") {
+    try {
+      const workerResult = await new Promise<SplatWorkerResponse>(
+        (resolve, reject) => {
+          const worker = new Worker(
+            new URL("./splat-converter.worker.ts", import.meta.url),
+            { type: "module", name: "nequ3d-2dgs-converter" },
+          );
+          worker.onmessage = (ev: MessageEvent<SplatWorkerResponse>) => {
+            worker.terminate();
+            resolve(ev.data);
+          };
+          worker.onerror = (err) => {
+            worker.terminate();
+            reject(err);
+          };
+          worker.postMessage(payload, transferables);
+        },
+      );
+      if (workerResult) return workerResult;
+    } catch {
+      // Fallback if Worker initialization fails under custom CSP
     }
-    if (colorAttr) {
-      return [
-        Math.round(
-          Math.min(
-            1,
-            Math.max(
-              0,
-              colorAttr.getX(i0) * r0 +
-                colorAttr.getX(i1) * r1 +
-                colorAttr.getX(i2) * r2,
-            ),
-          ) * 255,
-        ),
-        Math.round(
-          Math.min(
-            1,
-            Math.max(
-              0,
-              colorAttr.getY(i0) * r0 +
-                colorAttr.getY(i1) * r1 +
-                colorAttr.getY(i2) * r2,
-            ),
-          ) * 255,
-        ),
-        Math.round(
-          Math.min(
-            1,
-            Math.max(
-              0,
-              colorAttr.getZ(i0) * r0 +
-                colorAttr.getZ(i1) * r1 +
-                colorAttr.getZ(i2) * r2,
-            ),
-          ) * 255,
-        ),
-      ];
-    }
-    return fallbackColor;
-  };
-
-  const emitSplat = (
-    px: number,
-    py: number,
-    pz: number,
-    sx: number,
-    sy: number,
-    sz: number,
-    cr: number,
-    cg: number,
-    cb: number,
-    q: ThreeQuaternion,
-  ) => {
-    if (writeIdx >= budget) return;
-    const fOff = writeIdx * 8;
-    // Convert Three.js Y-up to gsplat OpenCV Y-down
-    f32[fOff + 0] = px - center.x;
-    f32[fOff + 1] = -(py - center.y);
-    f32[fOff + 2] = -(pz - center.z);
-    f32[fOff + 3] = sx;
-    f32[fOff + 4] = sy;
-    f32[fOff + 5] = sz;
-
-    const bOff = writeIdx * 32;
-    u8[bOff + 24] = cr;
-    u8[bOff + 25] = cg;
-    u8[bOff + 26] = cb;
-    u8[bOff + 27] = 255;
-    // gsplat SplatData quaternion byte layout is [w, x, y, z]
-    u8[bOff + 28] = encodeByte(q.w);
-    u8[bOff + 29] = encodeByte(q.x);
-    u8[bOff + 30] = encodeByte(q.y);
-    u8[bOff + 31] = encodeByte(q.z);
-    writeIdx += 1;
-  };
-
-  let nextGlobalTri = 0;
-  let globalTriOffset = 0;
-
-  for (let mIdx = 0; mIdx < entries.length && writeIdx < budget; mIdx++) {
-    const entry = entries[mIdx];
-    const posAttr = entry.geo.attributes.position;
-    const uvAttr = entry.geo.attributes.uv;
-    const colorAttr = entry.geo.attributes.color;
-    const index = entry.geo.index;
-    const { localMatrix, sampler, fallbackColor, triCount } = entry;
-
-    while (writeIdx < budget) {
-      const localTri = Math.floor(nextGlobalTri) - globalTriOffset;
-      if (localTri >= triCount) break;
-      nextGlobalTri += stride;
-      if (localTri < 0) continue;
-
-      const i0 = index ? index.getX(localTri * 3) : localTri * 3;
-      const i1 = index ? index.getX(localTri * 3 + 1) : localTri * 3 + 1;
-      const i2 = index ? index.getX(localTri * 3 + 2) : localTri * 3 + 2;
-
-      v0.fromBufferAttribute(posAttr, i0).applyMatrix4(localMatrix);
-      v1.fromBufferAttribute(posAttr, i1).applyMatrix4(localMatrix);
-      v2.fromBufferAttribute(posAttr, i2).applyMatrix4(localMatrix);
-
-      e01.subVectors(v1, v0);
-      e12.subVectors(v2, v1);
-      e20.subVectors(v0, v2);
-      norm.crossVectors(e01, e20).negate();
-      const twiceArea = norm.length();
-      if (twiceArea < 1e-10) continue;
-      norm.divideScalar(twiceArea);
-
-      // Longest edge defines primary tangent axis for optimal anisotropic ellipse fit
-      const l0 = e01.lengthSq();
-      const l1 = e12.lengthSq();
-      const l2 = e20.lengthSq();
-      if (l0 >= l1 && l0 >= l2) {
-        t1.copy(e01).normalize();
-      } else if (l1 >= l2) {
-        t1.copy(e12).normalize();
-      } else {
-        t1.copy(e20).normalize();
-      }
-      t2.crossVectors(norm, t1).normalize();
-
-      // Build right-handed orthonormal basis in OpenCV Y-down coordinates (det(C) = +1)
-      t1Cv.set(t1.x, -t1.y, -t1.z);
-      t2Cv.set(t2.x, -t2.y, -t2.z);
-      nCv.set(norm.x, -norm.y, -norm.z);
-      basisMat.makeBasis(t1Cv, t2Cv, nCv);
-      surfQuat.setFromRotationMatrix(basisMat);
-
-      const cx = (v0.x + v1.x + v2.x) / 3;
-      const cy = (v0.y + v1.y + v2.y) / 3;
-      const cz = (v0.z + v1.z + v2.z) / 3;
-
-      // Exact bounding half-extents of the triangle in its tangent plane
-      let minU = Infinity;
-      let maxU = -Infinity;
-      let minW = Infinity;
-      let maxW = -Infinity;
-      for (const v of [v0, v1, v2]) {
-        rel.set(v.x - cx, v.y - cy, v.z - cz);
-        const uProj = rel.dot(t1);
-        const wProj = rel.dot(t2);
-        if (uProj < minU) minU = uProj;
-        if (uProj > maxU) maxU = uProj;
-        if (wProj < minW) minW = wProj;
-        if (wProj > maxW) maxW = wProj;
-      }
-      const hx = (maxU - minU) * 0.5;
-      const hy = (maxW - minW) * 0.5;
-      const maxEdge = Math.sqrt(Math.max(l0, l1, l2));
-
-      // Deterministic barycentric subdivision for large low-poly faces
-      let k = 1;
-      if (allowSubdiv && maxEdge > targetEdge * 1.8) {
-        k = Math.min(6, Math.max(2, Math.ceil(maxEdge / targetEdge)));
-        if (writeIdx + k * k > budget) k = 1;
-      }
-
-      if (k === 1) {
-        const sx = Math.min(maxS, Math.max(minS, hx * 0.96 * coverageBoost));
-        const sy = Math.min(maxS, Math.max(minS, hy * 0.96 * coverageBoost));
-        const sz = Math.max(minS * 0.25, Math.min(sx, sy) * 0.14);
-        const [cr, cg, cb] = sampleColorAt(
-          sampler,
-          uvAttr,
-          colorAttr,
-          fallbackColor,
-          i0,
-          i1,
-          i2,
-          1 / 3,
-          1 / 3,
-          1 / 3,
-        );
-        emitSplat(cx, cy, cz, sx, sy, sz, cr, cg, cb, surfQuat);
-      } else {
-        const invK = 1 / k;
-        const sx = Math.min(maxS, Math.max(minS, (hx * invK) * 0.85));
-        const sy = Math.min(maxS, Math.max(minS, (hy * invK) * 0.85));
-        const sz = Math.max(minS * 0.25, Math.min(sx, sy) * 0.14);
-        for (let a = 0; a < k; a++) {
-          for (let b = 0; b < k - a; b++) {
-            // Upward sub-triangle centroid
-            const r1 = (a + 1 / 3) * invK;
-            const r2 = (b + 1 / 3) * invK;
-            const r0 = 1 - r1 - r2;
-            const px = v0.x * r0 + v1.x * r1 + v2.x * r2;
-            const py = v0.y * r0 + v1.y * r1 + v2.y * r2;
-            const pz = v0.z * r0 + v1.z * r1 + v2.z * r2;
-            const [cr, cg, cb] = sampleColorAt(
-              sampler,
-              uvAttr,
-              colorAttr,
-              fallbackColor,
-              i0,
-              i1,
-              i2,
-              r0,
-              r1,
-              r2,
-            );
-            emitSplat(px, py, pz, sx, sy, sz, cr, cg, cb, surfQuat);
-
-            // Downward sub-triangle centroid
-            if (a + b + 1 < k) {
-              const dr1 = (a + 2 / 3) * invK;
-              const dr2 = (b + 2 / 3) * invK;
-              const dr0 = 1 - dr1 - dr2;
-              const dpx = v0.x * dr0 + v1.x * dr1 + v2.x * dr2;
-              const dpy = v0.y * dr0 + v1.y * dr1 + v2.y * dr2;
-              const dpz = v0.z * dr0 + v1.z * dr1 + v2.z * dr2;
-              const [dcr, dcg, dcb] = sampleColorAt(
-                sampler,
-                uvAttr,
-                colorAttr,
-                fallbackColor,
-                i0,
-                i1,
-                i2,
-                dr0,
-                dr1,
-                dr2,
-              );
-              emitSplat(dpx, dpy, dpz, sx, sy, sz, dcr, dcg, dcb, surfQuat);
-            }
-          }
-        }
-      }
-    }
-
-    globalTriOffset += triCount;
   }
 
-  if (writeIdx === 0) return null;
-  const finalBuffer =
-    writeIdx < budget ? buffer.slice(0, writeIdx * 32) : buffer;
-  return {
-    buffer: finalBuffer,
-    count: writeIdx,
-    radius: Math.max(2.2, maxDim * 1.15),
-    center: [center.x, center.y, center.z],
-  };
+  return buildSplatFromMeshes(payload);
 }
 
 /** Resets the active standalone 3DGS camera back to its initial framing. */
@@ -869,6 +665,9 @@ function centerSplatBuffer(raw: ArrayBuffer): ConvertedSplat {
   };
 }
 
+const scratchFocal = new Float32Array(2);
+const scratchViewport = new Float32Array(2);
+
 /** Pushes updated projection/focal/viewport uniforms directly to gsplat's WebGL2 shader. */
 function pushProjectionUniforms(
   renderer: any,
@@ -889,11 +688,15 @@ function pushProjectionUniforms(
   }
   const focalLoc = gl.getUniformLocation(prog, "focal");
   if (focalLoc) {
-    gl.uniform2fv(focalLoc, new Float32Array([camera.data.fx, camera.data.fy]));
+    scratchFocal[0] = camera.data.fx;
+    scratchFocal[1] = camera.data.fy;
+    gl.uniform2fv(focalLoc, scratchFocal);
   }
   const vpLoc = gl.getUniformLocation(prog, "viewport");
   if (vpLoc) {
-    gl.uniform2fv(vpLoc, new Float32Array([canvas.width, canvas.height]));
+    scratchViewport[0] = canvas.width;
+    scratchViewport[1] = canvas.height;
+    gl.uniform2fv(vpLoc, scratchViewport);
   }
 }
 
@@ -968,6 +771,9 @@ export async function mountSplatViewer(
   const scene = new Scene();
   const camera = new Camera();
   const renderer = new Renderer(canvas);
+  // Match viewport backdrop instead of gsplat's hardcoded #000000
+  canvas.style.background =
+    "radial-gradient(circle at 50% 40%, #141a20 0%, #050607 70%)";
   activeRenderer = renderer;
 
   const syncViewer = options?.syncViewer ?? null;
@@ -1078,13 +884,50 @@ export async function mountSplatViewer(
   const relQuat = new ThreeQuaternion();
   const relScale = new ThreeVector3();
   let uniformsPrimed = false;
+  let depthReady = false;
+  let workerHooked = false;
+  let forceRenderFrames = 140;
+  const prevPose = new Float64Array(8);
+  prevPose.fill(NaN);
 
-  const syncFromModelViewer = () => {
-    if (!syncViewer || !Vector3 || !GsplatQuaternion) return;
+  const markDirty = (frames = 24) => {
+    if (frames > forceRenderFrames) forceRenderFrames = frames;
+  };
+  canvas.addEventListener("pointerdown", () => markDirty(45), { passive: true });
+  canvas.addEventListener(
+    "pointermove",
+    (e) => {
+      if (e.buttons !== 0) markDirty(24);
+    },
+    { passive: true },
+  );
+  canvas.addEventListener("wheel", () => markDirty(35), { passive: true });
+
+  const onSyncViewerActivity = () => markDirty(30);
+  if (syncViewer) {
+    syncViewer.addEventListener("camera-change", onSyncViewerActivity);
+    syncViewer.addEventListener("load", () => markDirty(140));
+  }
+  let sortWorkerRef: Worker | null = null;
+  const onSortWorkerMessage = () => {
+    markDirty(depthReady ? 4 : 120);
+  };
+  activeCleanupHook = () => {
+    if (syncViewer) {
+      syncViewer.removeEventListener("camera-change", onSyncViewerActivity);
+    }
+    if (sortWorkerRef) {
+      sortWorkerRef.removeEventListener("message", onSortWorkerMessage);
+      sortWorkerRef = null;
+    }
+  };
+
+  const syncFromModelViewer = (): boolean => {
+    if (!syncViewer || !Vector3 || !GsplatQuaternion) return false;
     const mvScene = (syncViewer as any)[$scene];
     const threeCam = mvScene?.camera as PerspectiveCamera | undefined;
     const mvRoot = getModelRoot(mvScene);
-    if (!threeCam || !mvRoot) return;
+    if (!threeCam || !mvRoot) return false;
 
     mvScene.updateMatrixWorld(true);
     threeCam.updateMatrixWorld(true);
@@ -1098,17 +941,34 @@ export async function mountSplatViewer(
     const fovRad = ((threeCam.fov || 30) * Math.PI) / 180;
     const focal = canvas.height / (2 * Math.tan(fovRad / 2));
 
-    camera.position = new Vector3(
-      relPos.x - syncCenter[0],
-      -(relPos.y - syncCenter[1]),
-      -(relPos.z - syncCenter[2]),
-    );
-    camera.rotation = new GsplatQuaternion(
-      relQuat.x,
-      -relQuat.y,
-      -relQuat.z,
-      relQuat.w,
-    );
+    const px = relPos.x - syncCenter[0];
+    const py = -(relPos.y - syncCenter[1]);
+    const pz = -(relPos.z - syncCenter[2]);
+    const qx = relQuat.x;
+    const qy = -relQuat.y;
+    const qz = -relQuat.z;
+    const qw = relQuat.w;
+
+    const eps = 1e-6;
+    const curP = camera.position;
+    const curR = camera.rotation;
+    if (
+      !curP ||
+      Math.abs(curP.x - px) > eps ||
+      Math.abs(curP.y - py) > eps ||
+      Math.abs(curP.z - pz) > eps
+    ) {
+      camera.position = new Vector3(px, py, pz);
+    }
+    if (
+      !curR ||
+      Math.abs(curR.x - qx) > eps ||
+      Math.abs(curR.y - qy) > eps ||
+      Math.abs(curR.z - qz) > eps ||
+      Math.abs(curR.w - qw) > eps
+    ) {
+      camera.rotation = new GsplatQuaternion(qx, qy, qz, qw);
+    }
 
     if (camera.data && Number.isFinite(focal) && focal > 1) {
       const changed =
@@ -1125,24 +985,86 @@ export async function mountSplatViewer(
         lastW = canvas.width;
         lastH = canvas.height;
         pushProjectionUniforms(renderer, camera, canvas);
+        markDirty(20);
       } else {
         camera.update?.();
       }
     } else {
       camera.update?.();
     }
+    return true;
+  };
+
+  const hasCameraMoved = (): boolean => {
+    const p = camera.position;
+    const r = camera.rotation;
+    if (!p || !r) return true;
+    const fx = camera.data?.fx ?? 0;
+    const eps = 1e-5;
+    const moved =
+      Math.abs(p.x - prevPose[0]) > eps ||
+      Math.abs(p.y - prevPose[1]) > eps ||
+      Math.abs(p.z - prevPose[2]) > eps ||
+      Math.abs(r.x - prevPose[3]) > eps ||
+      Math.abs(r.y - prevPose[4]) > eps ||
+      Math.abs(r.z - prevPose[5]) > eps ||
+      Math.abs(r.w - prevPose[6]) > eps ||
+      Math.abs(fx - prevPose[7]) > 0.05;
+    if (moved) {
+      prevPose[0] = p.x;
+      prevPose[1] = p.y;
+      prevPose[2] = p.z;
+      prevPose[3] = r.x;
+      prevPose[4] = r.y;
+      prevPose[5] = r.z;
+      prevPose[6] = r.w;
+      prevPose[7] = fx;
+      markDirty(20);
+    }
+    return moved;
   };
 
   const loop = () => {
     if (disposed) return;
     raf = requestAnimationFrame(loop);
+    if (document.hidden) return;
     try {
       if (syncViewer) {
-        syncFromModelViewer();
+        const synced = syncFromModelViewer();
+        if (!synced) {
+          // Wait until <model-viewer> finishes loading its GLTF scene
+          return;
+        }
       } else {
         controls?.update?.();
       }
+
+      const depthLen =
+        ((renderer as any)?.renderProgram?._depthIndex?.length as number) || 0;
+      if (depthLen > 0 && !depthReady) {
+        depthReady = true;
+        // Ensure gsplat's FadeInPass completes 100% once sorted indices arrive
+        markDirty(120);
+      }
+
+      const moved = hasCameraMoved();
+      if (depthReady && !moved && forceRenderFrames <= 0 && uniformsPrimed) {
+        return;
+      }
+      if (depthReady && forceRenderFrames > 0) forceRenderFrames -= 1;
+
       renderer.render(scene, camera);
+
+      if (!workerHooked) {
+        const w = (renderer as any)?.renderProgram?.worker as
+          | Worker
+          | undefined;
+        if (w) {
+          workerHooked = true;
+          sortWorkerRef = w;
+          w.addEventListener("message", onSortWorkerMessage);
+        }
+      }
       if (!uniformsPrimed && renderer?.renderProgram?.program) {
         uniformsPrimed = true;
         pushProjectionUniforms(renderer, camera, canvas);
@@ -1160,6 +1082,12 @@ export async function unmountSplatViewer(): Promise<void> {
   raf = 0;
   activeResetFn = null;
   activeTopViewFn = null;
+  try {
+    activeCleanupHook?.();
+  } catch {
+    /* ignore */
+  }
+  activeCleanupHook = null;
   if (activeKeyGuard) {
     window.removeEventListener("keydown", activeKeyGuard, true);
     activeKeyGuard = null;
@@ -1176,8 +1104,14 @@ export async function unmountSplatViewer(): Promise<void> {
     /* ignore */
   }
   activeControls = null;
+  const gl = (activeRenderer as any)?.gl as WebGL2RenderingContext | undefined;
   try {
     activeRenderer?.dispose?.();
+  } catch {
+    /* ignore */
+  }
+  try {
+    gl?.getExtension("WEBGL_lose_context")?.loseContext();
   } catch {
     /* ignore */
   }
