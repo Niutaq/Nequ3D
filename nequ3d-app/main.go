@@ -70,6 +70,11 @@ func main() {
 		URL:              "/",
 	})
 
+	if err := StartEmbeddedNATS(app); err != nil {
+		log.Printf("[Nequ3D NATS Warning]: %v", err)
+	}
+	defer StopEmbeddedNATS()
+
 	startGPUStatsTicker(app)
 
 	// Publish the local-file server URL on startup and whenever the frontend requests it,
