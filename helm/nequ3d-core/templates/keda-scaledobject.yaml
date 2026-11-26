@@ -1,0 +1,34 @@
+{{- if .Values.keda.enabled }}
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: {{ include "nequ3d-core.fullname" . }}-scaler
+  labels:
+    app: {{ include "nequ3d-core.fullname" . }}
+    app.kubernetes.io/part-of: nequ3d
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "nequ3d-core.fullname" . }}
+  pollingInterval: {{ .Values.keda.pollingInterval }}
+  cooldownPeriod: {{ .Values.keda.cooldownPeriod }}
+  minReplicaCount: {{ .Values.keda.minReplicaCount }}
+  maxReplicaCount: {{ .Values.keda.maxReplicaCount }}
+  triggers:
+    - type: prometheus
+      metadata:
+        serverAddress: {{ .Values.keda.prometheus.serverAddress | quote }}
+        metricName: nequ3d_active_grpc_requests
+        query: {{ .Values.keda.prometheus.query | quote }}
+        threshold: {{ .Values.keda.prometheus.threshold | quote }}
+    {{- if .Values.keda.natsJetStream.enabled }}
+    - type: nats-jetstream
+      metadata:
+        natsServerMonitoringEndpoint: {{ .Values.keda.natsJetStream.natsServerMonitoringEndpoint | quote }}
+        account: {{ .Values.keda.natsJetStream.account | quote }}
+        stream: {{ .Values.keda.natsJetStream.stream | quote }}
+        consumer: {{ .Values.keda.natsJetStream.consumer | quote }}
+        lagThreshold: {{ .Values.keda.natsJetStream.lagThreshold | quote }}
+    {{- end }}
+{{- end }}
