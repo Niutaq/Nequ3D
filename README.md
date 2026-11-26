@@ -27,22 +27,25 @@ Nequ3D turns **Reality Scan** captures into an **OpenUSD Building Renovation Dig
 | LocateAnything | Snapshot → object detections (optional microservice) |
 | Renovation agent | Ollama plans tools: `ProcessModel`, manifest, locate, advice |
 | Omniverse interop | Filesystem export + OpenUSD / SimReady-lite validation card for Kit |
+| Supply-chain & Provenance | DSSE-signed **in-toto** v1 (`SLSA Provenance v1.0`) + **ORAS** OCI artifact manifest |
+| Event-sourced Twin | **CloudEvents v1.0** timeline persisted in embedded **NATS JetStream** |
+| AI Grounding & Benchmarks | Local LLM telemetry faithfulness evaluator + reactive **marimo** LaTeX benchmark notebook |
 | NetSecOps | SHA-256 sidecars, MinIO metadata, loopback preview tokens |
 
 ## Architecture & Tech Stack
 
 | Component | Technology | Description |
 | --- | --- | --- |
-| **Frontend & 3D** | ![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178C6?logo=typescript&logoColor=white) ![Vite](https://img.shields.io/badge/Vite-v8.3-646CFF?logo=vite&logoColor=white) ![Three.js](https://img.shields.io/badge/Three.js-WebGL2-000000?logo=threedotjs&logoColor=white) ![gsplat](https://img.shields.io/badge/gsplat-3DGS-008CA8) | WebView2 UI, `<model-viewer>`, hybrid Mesh/3DGS, measurements, 2D Top View & 3D pins |
+| **Frontend & 3D** | ![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178C6?logo=typescript&logoColor=white) ![Vite](https://img.shields.io/badge/Vite-v8.3-646CFF?logo=vite&logoColor=white) ![Three.js](https://img.shields.io/badge/Three.js-WebGL2-000000?logo=threedotjs&logoColor=white) ![gsplat](https://img.shields.io/badge/gsplat-3DGS-008CA8) | WebView2 UI, `<model-viewer>`, hybrid Mesh/3DGS, Web Worker 2DGS converter, 2D Top View & 3D pins |
 | **Desktop Edge** | ![Wails](https://img.shields.io/badge/Wails-v3.1.0-DF0000) ![Go](https://img.shields.io/badge/Go-1.26+-00ADD8?logo=go&logoColor=white) | Native Windows shell, HTTP preview cache, GPU telemetry & tool-using agent |
 | **3D & Neural Core** | ![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white) ![OpenUSD](https://img.shields.io/badge/OpenUSD-SimReady-00B4D8) ![NVIDIA RTX NTC](https://img.shields.io/badge/NVIDIA_RTX_NTC-v0.10.1-76B900?logo=nvidia&logoColor=white) ![CUDA](https://img.shields.io/badge/CUDA-12.6-76B900?logo=nvidia&logoColor=white) | OpenUSD parsing, neural texture compression (`ntc-cli`), PSNR/SSIM & USD layers |
-| **RPC & Events** | ![gRPC](https://img.shields.io/badge/gRPC-Protobuf-244C5A) ![NATS](https://img.shields.io/badge/NATS-embedded-27AAE1?logo=natsdotio&logoColor=white) | Streaming Edge ↔ Core pipeline RPC and internal event bus |
-| **Object Storage** | ![MinIO](https://img.shields.io/badge/MinIO-S3_API-C72E49?logo=minio&logoColor=white) | `raw-scans` & `processed-models` buckets with SHA-256 integrity sidecars |
-| **Offline AI** | ![Ollama](https://img.shields.io/badge/Ollama-local-111827?logo=ollama&logoColor=white) ![LocateAnything](https://img.shields.io/badge/LocateAnything-optional-6366F1) | Local LLM advice/planner (`gemma:2b` / `llama3` / `llava`) — **no cloud API key** |
+| **RPC & Events** | ![gRPC](https://img.shields.io/badge/gRPC-Protobuf-244C5A) ![CloudEvents](https://img.shields.io/badge/CloudEvents-v1.0-1D4ED8?logo=cloudevents&logoColor=white) ![NATS JetStream](https://img.shields.io/badge/NATS_JetStream-durable-27AAE1?logo=natsdotio&logoColor=white) | Streaming Edge ↔ Core pipeline RPC & persistent digital-twin event timeline |
+| **Provenance & OCI** | ![in-toto](https://img.shields.io/badge/in--toto-SLSA_v1-0F766E) ![ORAS](https://img.shields.io/badge/ORAS-OCI_Artifacts-4F46E5) ![MinIO](https://img.shields.io/badge/MinIO-S3_API-C72E49?logo=minio&logoColor=white) | DSSE supply-chain attestations, OCI twin packaging & S3 buckets (`raw-scans` / `processed-models`) |
+| **Offline AI & Evals** | ![Ollama](https://img.shields.io/badge/Ollama-local-111827?logo=ollama&logoColor=white) ![Faithfulness Eval](https://img.shields.io/badge/Faithfulness-Telemetry_Judge-059669) ![LocateAnything](https://img.shields.io/badge/LocateAnything-optional-6366F1) | Local LLM planner/advisor (`gemma:2b` / `llama3` / `llava`) + automated numerical faithfulness scorer |
 | **Containers & K8s** | ![Docker](https://img.shields.io/badge/Docker-GPU-2496ED?logo=docker&logoColor=white) ![Podman](https://img.shields.io/badge/Podman-5+-892CA0?logo=podman&logoColor=white) ![Kubernetes](https://img.shields.io/badge/Kubernetes-local-326CE5?logo=kubernetes&logoColor=white) ![Helm](https://img.shields.io/badge/Helm-v3-0F1689?logo=helm&logoColor=white) | `nequ3d-core:v4` GPU container + local cluster packaging |
 | **GitOps & Secrets** | ![Argo CD](https://img.shields.io/badge/Argo_CD-GitOps-EF7B4D?logo=argo&logoColor=white) ![Sealed Secrets](https://img.shields.io/badge/Sealed_Secrets-CNCF-1F2937) | Declarative cluster sync and encrypted Kubernetes secrets |
 | **Observability** | ![OpenTelemetry](https://img.shields.io/badge/OpenTelemetry-OTLP-425CC7?logo=opentelemetry&logoColor=white) ![Jaeger](https://img.shields.io/badge/Jaeger-tracing-60D0E4?logo=jaeger&logoColor=black) ![Prometheus](https://img.shields.io/badge/Prometheus-metrics-E6522C?logo=prometheus&logoColor=white) ![Grafana](https://img.shields.io/badge/Grafana-dashboards-F46800?logo=grafana&logoColor=white) | End-to-end W3C trace propagation (Edge → gRPC → Core), Core metrics (`:8001`) & dashboards |
-| **Automation & CI** | ![Task](https://img.shields.io/badge/Task-runner-29BEB0?logo=task&logoColor=white) ![GitHub Actions](https://img.shields.io/badge/GitHub_Actions-CI-2088FF?logo=githubactions&logoColor=white) | One-command launch (`task run-all`) + Frontend / Go / Python / Helm CI |
+| **Research & CI** | ![marimo](https://img.shields.io/badge/marimo-notebook-10B981) ![Task](https://img.shields.io/badge/Task-runner-29BEB0?logo=task&logoColor=white) ![GitHub Actions](https://img.shields.io/badge/GitHub_Actions-CI-2088FF?logo=githubactions&logoColor=white) | Reactive NTC rate-distortion & LaTeX notebook (`task notebook`) + automated CI |
 
 ```powershell
 go install github.com/wailsapp/wails/v3/cmd/wails3@v3.1.0

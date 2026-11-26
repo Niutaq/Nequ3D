@@ -128,3 +128,29 @@ tasks:
     platforms: [windows]
     cmds:
       - pwsh -NoProfile -File ./scripts/run-all.ps1 -NoStack -BuildCore
+
+  benchmark-sweep:
+    desc: Runs multi-BPP NVIDIA RTX NTC benchmark sweep (2, 4, 5, 6 BPP) for the thesis
+    platforms: [windows]
+    cmds:
+      - pwsh -NoProfile -File ./experiments/run-ntc-benchmark.ps1 -BppList "2,4,5,6" -StepsList "150,450"
+
+  notebook:
+    desc: Opens the reactive marimo thesis benchmark & LaTeX table notebook (auto-installs marimo into data/marimo-venv if missing)
+    cmds:
+      - cmd: pwsh -NoProfile -File ./scripts/run-notebook.ps1 -Mode edit
+        platforms: [windows]
+      - cmd: python3 -m marimo edit ./experiments/ntc_thesis_notebook.py
+        platforms: [linux, darwin]
+
+  notebook-view:
+    desc: Opens the marimo thesis benchmark notebook in read-only presentation app mode
+    platforms: [windows]
+    cmds:
+      - pwsh -NoProfile -File ./scripts/run-notebook.ps1 -Mode run
+
+  oras-dryrun:
+    desc: Validates OCI / ORAS artifact layers and in-toto provenance bundle (pass TWIN_DIR=...)
+    platforms: [windows]
+    cmds:
+      - pwsh -NoProfile -File ./scripts/push-oras-twin.ps1 -TwinDir "{{.TWIN_DIR}}" -DryRun
