@@ -73,6 +73,9 @@ func NewApp() *App {
 
 // GenerateRenovationAdvice sends a request to the local Ollama API to generate renovation advice based on telemetry data
 func (a *App) GenerateRenovationAdvice(telemetryJSON string) (string, error) {
+	advCtx, advSpan := edgeTracer().Start(context.Background(), "nequ3d.edge.generate_advice")
+	defer advSpan.End()
+
 	model, telemetryForPrompt, instructionCtx, imageBase64 := normalizeAdvicePayload(telemetryJSON)
 	// Task 2: Pre-compute NTC logic in Go for the LLM
 	var telemetryMap map[string]any
@@ -360,7 +363,25 @@ ZONE CONTEXT:
 	}
 
 	cleaned := stripConversationalPreamble(fullResponse.String())
-	application.Get().Event.Emit("llmDone", cleaned)
+	faithReport := evaluateAdviceFaithfulnessInternal(cleaned, telemetryForPrompt, model, isPolish)
+	advSpan.SetAttributes(
+		attribute.String("nequ3d.llm.model", model),
+		attribute.Float64("nequ3d.llm.faithfulness_score", faithReport.Score),
+		attribute.String("nequ3d.llm.faithfulness_verdict", faithReport.Verdict),
+		attribute.Int("nequ3d.llm.unsupported_numbers", len(faithReport.UnsupportedNumbers)),
+	)
+	if app := application.Get(); app != nil {
+		app.Event.Emit("llmDone", cleaned)
+		if rawFaith, err := json.Marshal(faithReport); err == nil {
+			app.Event.Emit("llmFaithfulness", string(rawFaith))
+		}
+	}
+	_, _ = publishTwinCloudEvent(advCtx, "io.nequ3d.twin.ai.evaluated", objectName, map[string]any{
+		"model":      model,
+		"score_pct":  faithReport.ScorePct,
+		"verdict":    faithReport.Verdict,
+		"grounded_n": len(faithReport.MatchedFacts),
+	})
 	return cleaned, nil
 }
 
@@ -815,7 +836,16 @@ func (a *App) ProcessModel(absolutePath string, bpp string, steps string) (strin
 
 	edgeTimings["total_ms"] = float64(time.Since(tStart).Microseconds()) / 1000.0
 	jsonResult = enrichTelemetryWithTrace(jsonResult, traceID, edgeTimings)
+	jsonResult = enrichTelemetryWithProvenance(rootCtx, jsonResult, traceID)
 	rootSpan.SetStatus(codes.Ok, "completed")
+
+	_, _ = publishTwinCloudEvent(rootCtx, "io.nequ3d.twin.scan.processed", fileName, map[string]any{
+		"bpp":        bppInt,
+		"steps":      stepsInt,
+		"total_ms":   edgeTimings["total_ms"],
+		"trace_id":   traceID,
+		"s3_raw_key": objectKey,
+	})
 
 	fmt.Printf("[Wails Backend] Successfully received telemetry for %s. Processing finished.\n", fileName)
 
@@ -963,6 +993,11 @@ func (a *App) LocateObjects(imageBase64 string, prompt string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to marshal response: %v", err)
 	}
+
+	_, _ = publishTwinCloudEvent(ctx, "io.nequ3d.twin.objects.located", prompt, map[string]any{
+		"prompt":          prompt,
+		"detection_count": len(resp.GetDetections()),
+	})
 
 	return string(jsonResp), nil
 }

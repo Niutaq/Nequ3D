@@ -177,6 +177,38 @@ func (a *App) RunRenovationAgent(requestJSON string) (string, error) {
 		}
 	}
 
+	var faithReport *FaithfulnessReport
+	if advice != "" {
+		isPl := strings.EqualFold(req.Language, "Polish") || strings.EqualFold(req.Language, "pl")
+		rep := evaluateAdviceFaithfulnessInternal(advice, preferStringJSON(telemetry), sanitizeOllamaModel(req.Model), isPl)
+		faithReport = &rep
+		emit(agentStep{
+			Tool:    "verify_faithfulness",
+			Status:  "ok",
+			Detail:  fmt.Sprintf("%d%% (%s)", rep.ScorePct, rep.Verdict),
+			Payload: rep,
+		})
+		if app := application.Get(); app != nil {
+			if rawFaith, err := json.Marshal(rep); err == nil {
+				app.Event.Emit("llmFaithfulness", string(rawFaith))
+			}
+		}
+	}
+
+	agentSubject := filepath.Base(req.AssetPath)
+	if agentSubject == "" || agentSubject == "." {
+		agentSubject = "building_twin"
+	}
+	scorePct := 0
+	if faithReport != nil {
+		scorePct = faithReport.ScorePct
+	}
+	_, _ = publishTwinCloudEvent(context.Background(), "io.nequ3d.twin.agent.completed", agentSubject, map[string]any{
+		"model":             sanitizeOllamaModel(req.Model),
+		"tools":             tools,
+		"faithfulness_pct":  scorePct,
+	})
+
 	result, _ := json.Marshal(map[string]any{
 		"status":            "ok",
 		"tools":             tools,
@@ -184,10 +216,20 @@ func (a *App) RunRenovationAgent(requestJSON string) (string, error) {
 		"manifest_summary":  manifestSummary,
 		"locate":            json.RawMessage(preferRawJSON(locateResult)),
 		"advice":            advice,
+		"faithfulness":      faithReport,
 		"completed_at":      time.Now().UTC().Format(time.RFC3339),
 	})
-	application.Get().Event.Emit("agentDone", string(result))
+	if app := application.Get(); app != nil {
+		app.Event.Emit("agentDone", string(result))
+	}
 	return string(result), nil
+}
+
+func preferStringJSON(s string) string {
+	if json.Valid([]byte(s)) {
+		return s
+	}
+	return "{}"
 }
 
 func normalizeAgentPlan(raw []string, req agentRequest, hasLocatePrompt bool) []string {

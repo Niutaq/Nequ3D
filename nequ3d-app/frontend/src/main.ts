@@ -1,13 +1,16 @@
 // frontend/src/main.ts
 // Global base styles are loaded via /style.css in index.html
 import {
+  EvaluateAdviceFaithfulness,
   GenerateRenovationAdvice,
+  GetTwinEvents,
   ProcessModel,
   SelectFile,
   DownloadFromSketchfab,
   LocateObjects,
   SaveTwinAnnotations,
   RunRenovationAgent,
+  VerifyTwinProvenance,
 } from "../bindings/changeme/app";
 import "@google/model-viewer";
 import { $renderer } from "@google/model-viewer/lib/model-viewer-base.js";
@@ -668,6 +671,54 @@ style.textContent = `
     background: linear-gradient(90deg, var(--accent-solid), var(--accent-teal));
   }
 
+  .ce-list {
+    max-height: 148px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    padding-right: 3px;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border-strong) transparent;
+  }
+  .ce-item {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 6px 8px;
+    border-radius: 7px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border-color);
+    font-size: 0.72rem;
+  }
+  .ce-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    font-family: var(--font-mono);
+    font-size: 0.67rem;
+  }
+  .ce-type {
+    color: var(--accent-teal);
+    font-weight: 700;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .ce-seq {
+    color: var(--text-muted);
+    flex-shrink: 0;
+  }
+  .ce-sub {
+    display: flex;
+    justify-content: space-between;
+    gap: 6px;
+    color: var(--text-muted);
+    font-family: var(--font-sans);
+    font-size: 0.7rem;
+  }
+
   .measure-list { display: flex; flex-direction: column; gap: 6px; }
   #measure-list {
     max-height: 152px;
@@ -1070,6 +1121,8 @@ let lastDetections: unknown = null;
 // Global state to allow re-translating telemetry and LLM without re-running analysis
 let currentRawTelemetry: string | null = null;
 let currentTelemetryData: any = null;
+let currentFaithfulness: any = null;
+let twinCloudEvents: any[] = [];
 
 const comparisonState = {
   split: 50,
@@ -1305,6 +1358,15 @@ function initUI(): void {
             <span data-i18n="saveTwinBtn"></span>
           </button>
           <div id="twin-save-status" class="measure-hint"></div>
+          <details id="ce-drawer" class="simready-card" style="margin-top:6px;">
+            <summary>
+              <span data-i18n="ceTitle"></span>
+              <span id="ce-count-badge" class="simready-badge ok">0</span>
+            </summary>
+            <div class="simready-checks">
+              <div id="ce-timeline-list" class="ce-list"></div>
+            </div>
+          </details>
         </div>
 
         <div class="panel-section">
@@ -1323,6 +1385,7 @@ function initUI(): void {
           </button>
           <div id="agent-log" class="measure-list"></div>
           <div id="ai-output"></div>
+          <div id="ai-faithfulness"></div>
         </div>
       </aside>
     </div>
@@ -1345,6 +1408,7 @@ function initUI(): void {
   guardModelViewerArBug();
   startLocalClock();
   startFpsCounter();
+  void refreshTwinEventsTimeline();
   playStartupIntro();
 }
 
@@ -2123,6 +2187,25 @@ function attachEventListeners(): void {
   });
   Events.On("agentStep", (event: any) => {
     appendAgentStep(unwrapWailsPayload(event));
+  });
+  Events.On("twinCloudEvent", (event: any) => {
+    const raw = unwrapWailsPayload(event);
+    const parsed = typeof raw === "string" ? safeJsonParse<any>(raw) : raw;
+    if (parsed && parsed.id) {
+      twinCloudEvents = [
+        parsed,
+        ...twinCloudEvents.filter((x) => x.id !== parsed.id),
+      ].slice(0, 40);
+      renderCloudEventsTimeline();
+    }
+  });
+  Events.On("llmFaithfulness", (event: any) => {
+    const raw = unwrapWailsPayload(event);
+    const parsed = typeof raw === "string" ? safeJsonParse<any>(raw) : raw;
+    if (parsed && typeof parsed.score_pct === "number") {
+      currentFaithfulness = parsed;
+      renderFaithfulnessCard(parsed);
+    }
   });
 
   getEl<HTMLButtonElement>("btn-rot-x").addEventListener("click", () => {
@@ -3471,6 +3554,7 @@ function formatAgentToolLabel(tool: string): string {
     process_model: ["Process model", "Przetwarzanie modelu"],
     locate_objects: ["Locate objects", "Detekcja obiektów"],
     advice: ["AI summary", "Rekomendacja AI"],
+    verify_faithfulness: ["Faithfulness eval", "Weryfikacja wierności"],
     save_annotations: ["Save annotations", "Zapis adnotacji"],
     agent: ["Agent", "Agent"],
   };
@@ -3605,6 +3689,25 @@ async function runRenovationAgent(): Promise<void> {
       const cleanedAdvice = stripAiPreamble(String(parsed.advice));
       getEl<HTMLDivElement>("ai-output").innerHTML =
         `<div class="ai-insight-card">${formatMarkdown(cleanedAdvice)}</div>`;
+      if (parsed.faithfulness) {
+        currentFaithfulness = parsed.faithfulness;
+        renderFaithfulnessCard(parsed.faithfulness);
+      } else if (currentRawTelemetry) {
+        try {
+          const evalRaw = await EvaluateAdviceFaithfulness(
+            cleanedAdvice,
+            currentRawTelemetry,
+            IntLayer.currentLang,
+          );
+          const rep = safeJsonParse<any>(evalRaw);
+          if (rep) {
+            currentFaithfulness = rep;
+            renderFaithfulnessCard(rep);
+          }
+        } catch {
+          /* ignore */
+        }
+      }
     }
   } catch (e) {
     appendAgentStep({ tool: "agent", status: "error", detail: String(e) });
@@ -3631,6 +3734,8 @@ function setLanguage(lang: Language): void {
   renderMeasureList(getMeasurements());
   renderPinList(getPinNotes());
   renderZonesList((currentTelemetryData?.zones as BuildingZone[]) || []);
+  renderCloudEventsTimeline();
+  if (currentFaithfulness) renderFaithfulnessCard(currentFaithfulness);
   updateDimsBadge(getEl("viewer-usd") as any);
 
   // Re-render telemetry immediately in new language
@@ -3940,9 +4045,150 @@ function renderTelemetryHTML(data: any): string {
   }
 
   html += renderSimReadyCardHTML(data);
+  html += renderProvenanceCardHTML(data);
   html += renderOtelTraceCardHTML(data);
 
   return html;
+}
+
+async function refreshTwinEventsTimeline(): Promise<void> {
+  try {
+    const raw = await GetTwinEvents(30);
+    const parsed = safeJsonParse<any[]>(raw);
+    if (Array.isArray(parsed)) {
+      twinCloudEvents = parsed;
+    }
+  } catch {
+    /* ignore before backend ready */
+  }
+  renderCloudEventsTimeline();
+}
+
+function renderCloudEventsTimeline(): void {
+  const list = document.getElementById("ce-timeline-list");
+  const badge = document.getElementById("ce-count-badge");
+  if (!list || !badge) return;
+  badge.textContent = String(twinCloudEvents.length);
+  if (!twinCloudEvents.length) {
+    list.innerHTML = `<div class="measure-hint" data-i18n="ceEmpty">${IntLayer.t.ceEmpty}</div>`;
+    return;
+  }
+  list.innerHTML = twinCloudEvents
+    .map((ev) => {
+      const shortType = String(ev.type || "").replace(/^io\.nequ3d\.twin\./, "");
+      const seq = ev.streamseq ? `#${ev.streamseq}` : "";
+      let hhmmss = "";
+      if (typeof ev.time === "string") {
+        const d = new Date(ev.time);
+        if (!Number.isNaN(d.getTime())) {
+          hhmmss = d.toLocaleTimeString([], {
+            hour: "2-digit",
+            minute: "2-digit",
+            second: "2-digit",
+          });
+        }
+      }
+      const subj = escapeHtml(String(ev.subject || "twin"));
+      return `<div class="ce-item">
+        <div class="ce-head">
+          <span class="ce-type" title="${escapeHtml(String(ev.type || ""))}">${escapeHtml(shortType)}</span>
+          <span class="ce-seq">${escapeHtml(seq)} · ${escapeHtml(hhmmss)}</span>
+        </div>
+        <div class="ce-sub">
+          <span>${subj}</span>
+          <span>CloudEvents 1.0</span>
+        </div>
+      </div>`;
+    })
+    .join("");
+}
+
+function renderFaithfulnessCard(rep: any): void {
+  const host = document.getElementById("ai-faithfulness");
+  if (!host || !rep) return;
+  const pct = Number(rep.score_pct ?? 0);
+  const verdict = String(rep.verdict || "faithful");
+  const badgeCls = verdict === "faithful" ? "ok" : "warn";
+  const badgeText =
+    verdict === "faithful"
+      ? `${pct}% · ${IntLayer.t.faithFaithful}`
+      : verdict === "warning"
+        ? `${pct}% · ${IntLayer.t.faithWarning}`
+        : `${pct}% · ${IntLayer.t.faithHallucinated}`;
+
+  const checks: Array<{ passed?: boolean; label?: string; detail?: string }> =
+    Array.isArray(rep.checks) ? rep.checks : [];
+  const rowsHtml = checks
+    .map((c) => {
+      const ok = Boolean(c.passed);
+      const cls = ok ? "ok" : "warn";
+      const icon = ok ? "✓" : "!";
+      return `<div class="simready-row ${cls}">
+        <span class="sr-icon">${icon}</span>
+        <span><strong>${escapeHtml(String(c.label || ""))}:</strong> ${escapeHtml(String(c.detail || ""))}</span>
+      </div>`;
+    })
+    .join("");
+
+  host.innerHTML = `
+    <details class="simready-card" style="margin-top:4px;">
+      <summary>
+        <span>${IntLayer.t.faithTitle}</span>
+        <span class="simready-badge ${badgeCls}">${escapeHtml(badgeText)}</span>
+      </summary>
+      <div class="simready-checks">${rowsHtml}</div>
+    </details>
+  `;
+}
+
+function renderProvenanceCardHTML(data: any): string {
+  const ver = data?.provenance_verification;
+  const prov = data?.provenance;
+  const targetDir = String(data?.omniverse_export_dir || data?.twin_dir || "");
+  if (!ver && !prov && !targetDir) return "";
+
+  const isPl = IntLayer.currentLang === "pl";
+  const verified = ver ? Boolean(ver.verified) : Boolean(prov?.intoto_sha256);
+  const subjCount = Number(ver?.subject_count ?? prov?.subject_count ?? 0);
+  const digest = String(ver?.intoto_sha256 || prov?.intoto_sha256 || "");
+  const shortDigest = digest ? `${digest.slice(0, 14)}…` : "DSSE";
+  const artifactType = String(
+    ver?.artifact_type ||
+      prov?.artifact_type ||
+      "application/vnd.nequ3d.twin.v1+json",
+  );
+
+  return `
+    <details class="simready-card">
+      <summary>
+        <span>${IntLayer.t.intotoTitle}</span>
+        <span id="intoto-status-badge" class="simready-badge ${verified ? "ok" : "warn"}">${
+          verified ? IntLayer.t.intotoVerified : IntLayer.t.intotoTampered
+        }</span>
+      </summary>
+      <div class="simready-checks">
+        <div class="simready-row ${verified ? "ok" : "warn"}">
+          <span class="sr-icon">${verified ? "✓" : "!"}</span>
+          <span id="intoto-subj-text">${
+            isPl
+              ? `Podpis DSSE + ${subjCount} artefaktów SHA-256 (${shortDigest})`
+              : `DSSE signature + ${subjCount} SHA-256 subjects (${shortDigest})`
+          }</span>
+        </div>
+        <div class="simready-row info">
+          <span class="sr-icon">•</span>
+          <span>ORAS OCI: <code>${escapeHtml(artifactType)}</code></span>
+        </div>
+        ${
+          targetDir
+            ? `<div style="margin-top:4px;display:flex;justify-content:flex-end;">
+                <button type="button" class="nav-reset-btn" data-intoto-verify="${escapeHtml(targetDir)}">${IntLayer.t.intotoVerifyBtn}</button>
+              </div>`
+            : ""
+        }
+      </div>
+    </details>
+  `;
 }
 
 function formatMs(ms: number): string {
@@ -4294,6 +4540,43 @@ function initTelemetryCharts(data: any): void {
           animateBlurValue(btn, IntLayer.t.otelCopied);
           window.setTimeout(() => animateBlurValue(btn, orig), 1400);
         });
+      });
+    });
+  document
+    .querySelectorAll<HTMLButtonElement>("[data-intoto-verify]")
+    .forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const dir = btn.getAttribute("data-intoto-verify") || "";
+        if (!dir) return;
+        btn.disabled = true;
+        try {
+          const raw = await VerifyTwinProvenance(dir);
+          const ver = safeJsonParse<any>(raw);
+          if (ver) {
+            if (currentTelemetryData) {
+              currentTelemetryData.provenance_verification = ver;
+            }
+            const badge = document.getElementById("intoto-status-badge");
+            const subjText = document.getElementById("intoto-subj-text");
+            if (badge) {
+              badge.className = `simready-badge ${ver.verified ? "ok" : "warn"}`;
+              badge.textContent = ver.verified
+                ? IntLayer.t.intotoVerified
+                : IntLayer.t.intotoTampered;
+            }
+            if (subjText) {
+              const short = String(ver.intoto_sha256 || "").slice(0, 14);
+              subjText.textContent =
+                IntLayer.currentLang === "pl"
+                  ? `Zweryfikowano na żywo: ${ver.subject_count} plików (${short}…)`
+                  : `Live verified: ${ver.subject_count} files (${short}…)`;
+            }
+          }
+        } catch (e) {
+          console.warn("[Nequ3D] Provenance check failed", e);
+        } finally {
+          btn.disabled = false;
+        }
       });
     });
   if (
